@@ -1,0 +1,7 @@
+{
+  "name": "ITO Leva!",
+  "content_in_root": false,
+  "filename": "hacs.json",
+  "country": ["DE"],
+  "homeassistant": "2025.1.0"
+}

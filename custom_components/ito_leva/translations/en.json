@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to ITO Leva!",
+        "description": "LAN address of the ITO Leva! module.",
+        "data": {
+          "host": "Host (IP address)",
+          "port": "Port (default 23)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the ITO module."
+    },
+    "abort": {
+      "already_configured": "This machine is already configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": { "name": "State" },
+      "pressure": { "name": "Group pressure" },
+      "flow_weight": { "name": "Flow (scale)" },
+      "flow_meter": { "name": "Flow (flow meter)" },
+      "temp": { "name": "Group temperature" },
+      "setpoint": { "name": "Setpoint" },
+      "weight": { "name": "Cup weight" },
+      "volume": { "name": "Volume" },
+      "timer": { "name": "Shot timer" },
+      "alarm": { "name": "Alarm" },
+      "connection": { "name": "Connection" }
+    },
+    "button": {
+      "start_shot": { "name": "Start shot" },
+      "stop_shot": { "name": "Stop shot" },
+      "flush": { "name": "Flush (group rinse)" },
+      "warmup": { "name": "Warm up (heat group to setpoint)" },
+      "pump_pb": { "name": "Push-button pump" },
+      "backflush": { "name": "Backflush (detergent cycle)" },
+      "descale": { "name": "Descale (limescale-removal cycle)" },
+      "wake": { "name": "Wake from standby" },
+      "standby": { "name": "Standby" },
+      "eco": { "name": "Energy saver" },
+      "dose": { "name": "Fire active dose" }
+    },
+    "number": {
+      "setpoint": { "name": "Setpoint" }
+    },
+    "text": {
+      "lcd_mirror": { "name": "LCD mirror" },
+      "active_profile": { "name": "Active profile" }
+    }
+  },
+  "services": {
+    "refresh_setup": {
+      "name": "Refresh setup",
+      "description": "Triggers an MCu dump and refreshes the read-only setup sensors."
+    },
+    "start_shot": {
+      "name": "Start shot",
+      "description": "Starts the shot (with watchdog, see start button)."
+    },
+    "stop_shot": {
+      "name": "Stop shot",
+      "description": "Stops a running shot (OK button)."
+    }
+  }
+}

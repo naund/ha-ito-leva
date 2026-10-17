@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mit ITO Leva! verbinden",
+        "description": "LAN-Adresse des ITO-Leva!-Moduls.",
+        "data": {
+          "host": "Host (IP-Adresse)",
+          "port": "Port (Standard 23)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "ITO-Modul nicht erreichbar."
+    },
+    "abort": {
+      "already_configured": "Diese Maschine ist bereits eingerichtet."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": { "name": "Status" },
+      "pressure": { "name": "Gruppendruck" },
+      "flow_weight": { "name": "Flow (Waage)" },
+      "flow_meter": { "name": "Flow (Flowmeter)" },
+      "temp": { "name": "Gruppentemperatur" },
+      "setpoint": { "name": "Sollwert" },
+      "weight": { "name": "Tassengewicht" },
+      "volume": { "name": "Volumen" },
+      "timer": { "name": "Shot-Timer" },
+      "alarm": { "name": "Alarm" },
+      "connection": { "name": "Verbindung" }
+    },
+    "button": {
+      "start_shot": { "name": "Shot starten" },
+      "stop_shot": { "name": "Shot stoppen" },
+      "flush": { "name": "Flush (Gruppe spülen)" },
+      "warmup": { "name": "Aufwärmen (Gruppe auf Sollwert heizen)" },
+      "pump_pb": { "name": "Pumpe (Taster)" },
+      "backflush": { "name": "Backflush (Reinigungszyklus)" },
+      "descale": { "name": "Entkalken (Kalk aus dem Kessel entfernen)" },
+      "wake": { "name": "Aus Standby aufwecken" },
+      "standby": { "name": "Standby" },
+      "eco": { "name": "Energiesparen" },
+      "dose": { "name": "Aktive Dosis beziehen" }
+    },
+    "number": {
+      "setpoint": { "name": "Sollwert" }
+    },
+    "text": {
+      "lcd_mirror": { "name": "LCD-Spiegel" },
+      "active_profile": { "name": "Aktives Profil" }
+    }
+  },
+  "services": {
+    "refresh_setup": {
+      "name": "Setup neu einlesen",
+      "description": "Löst einen MCu-Dump aus und aktualisiert die read-only Setup-Sensoren."
+    },
+    "start_shot": {
+      "name": "Shot starten",
+      "description": "Startet den Shot (mit Watchdog, siehe Start-Button)."
+    },
+    "stop_shot": {
+      "name": "Shot stoppen",
+      "description": "Stoppt einen laufenden Shot (OK-Taste)."
+    }
+  }
+}

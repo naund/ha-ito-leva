@@ -1,0 +1,12 @@
+refresh_setup:
+  name: Setup neu einlesen
+  description: Löst einen MCu-Dump aus und aktualisiert die read-only Setup-Sensoren.
+  fields: {}
+start_shot:
+  name: Shot starten
+  description: Startet den Shot (mit Watchdog, siehe Start-Button).
+  fields: {}
+stop_shot:
+  name: Shot stoppen
+  description: Stoppt einen laufenden Shot (OK-Taste).
+  fields: {}

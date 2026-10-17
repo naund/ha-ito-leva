@@ -1,0 +1,81 @@
+# ITO Leva! Phase-1-Dashboard (nur Stock-Cards, keine Custom-Card nötig).
+# Übernehmen: Einstellungen -> Dashboards -> ... -> YAML einfügen,
+# Entity-IDs ggf. an die tatsächlichen Namen anpassen.
+title: ITO Leva!
+views:
+  - title: Brühen
+    cards:
+      - type: markdown
+        content: >
+          ## {{ states('sensor.ito_leva_state') }} · {{
+          states('sensor.ito_leva_timer') }} s · Profil: {{
+          states('text.ito_leva_active_profile') }}
+      - type: entities
+        title: Live-Werte
+        entities:
+          - entity: sensor.ito_leva_pressure
+            name: Druck (Gruppe)
+          - entity: sensor.ito_leva_flow_meter
+            name: Flow (Flowmeter, ml/s)
+          - entity: sensor.ito_leva_flow_weight
+            name: Flow (Waage, g/s)
+          - entity: sensor.ito_leva_temp
+            name: Temperatur
+          - entity: sensor.ito_leva_weight
+            name: Gewicht (Waage)
+          - entity: sensor.ito_leva_volume
+            name: Volumen
+          - entity: sensor.ito_leva_setpoint
+            name: Sollwert
+          - entity: sensor.ito_leva_alarm
+            name: Alarm
+      - type: entities
+        title: Shot-Steuerung
+        entities:
+          - entity: button.ito_leva_start_shot
+          - entity: button.ito_leva_stop_shot
+          - entity: number.ito_leva_setpoint
+      - type: history-graph
+        title: Verlauf (1 Hz, Kurzzeit)
+        hours_to_show: 1
+        entities:
+          - entity: sensor.ito_leva_pressure
+          - entity: sensor.ito_leva_temp
+  - title: Betrieb
+    cards:
+      - type: grid
+        title: Täglich
+        columns: 3
+        cards:
+          - type: button
+            entity: button.ito_leva_flush
+            name: Flush
+            icon: mdi:shower
+          - type: button
+            entity: button.ito_leva_pump_pb
+            name: Pumpe
+            icon: mdi:pump
+          - type: button
+            entity: button.ito_leva_warmup
+            name: Warm-Up
+            icon: mdi:sun-thermometer
+      - type: grid
+        title: Entkalken
+        columns: 2
+        cards:
+          - type: button
+            entity: button.ito_leva_backflush
+            name: Backflush
+            icon: mdi:coffee-maker
+          - type: button
+            entity: button.ito_leva_descale
+            name: Entkalken
+            icon: mdi:bottle-tonic
+      - type: entities
+        title: Energie & LCD
+        entities:
+          - entity: button.ito_leva_wake
+          - entity: button.ito_leva_eco
+          - entity: button.ito_leva_standby
+          - entity: text.ito_leva_lcd_mirror
+          - entity: sensor.ito_leva_connection

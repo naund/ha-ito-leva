@@ -2,12 +2,14 @@
   "domain": "ito_leva",
   "name": "ITO Leva!",
   "version": "0.1.0",
-  "documentation": "https://github.com/example/ha-ito-leva",
-  "issue_tracker": "https://github.com/example/ha-ito-leva/issues",
+  "documentation": "https://github.com/naund/ha-ito-leva",
+  "issue_tracker": "https://github.com/naund/ha-ito-leva/issues",
   "dependencies": [],
-  "codeowners": [],
+  "codeowners": "nau@gmx.net",
   "requirements": [],
   "config_flow": true,
   "iot_class": "local_push",
-  "loggers": ["custom_components.ito_leva"]
+  "loggers": [
+    "custom_components.ito_leva"
+  ]
 }

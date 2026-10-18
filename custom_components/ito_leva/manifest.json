@@ -2,7 +2,7 @@
   "domain": "ito_leva",
   "name": "ITO Leva!",
   "version": "0.1.0",
-  "documentation": "https://github.com/naund/ha-ito-leva",
+  "documentation": "https://github.com/naund/ha-ito-leva/README.md",
   "issue_tracker": "https://github.com/naund/ha-ito-leva/issues",
   "dependencies": [],
   "codeowners": "nau@gmx.net",

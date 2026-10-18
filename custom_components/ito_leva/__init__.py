@@ -41,13 +41,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator.setup_tree = parsers.parse_mcu_tree(lines)
         _LOGGER.info("Setup tree refreshed (%d lines)", len(lines))
 
+    async def _handle_start_shot(_call: ServiceCall) -> None:
+        """Service ito_leva.start_shot: same sequence as the start button."""
+        await coordinator.client.start_shot()
+
+    async def _handle_stop_shot(_call: ServiceCall) -> None:
+        """Service ito_leva.stop_shot: same sequence as the stop button."""
+        await coordinator.client.stop_shot()
+
     hass.services.async_register(DOMAIN, "refresh_setup", _handle_refresh_setup)
-    hass.services.async_register(
-        DOMAIN, "start_shot", lambda call: coordinator.client.start_shot()
-    )
-    hass.services.async_register(
-        DOMAIN, "stop_shot", lambda call: coordinator.client.stop_shot()
-    )
+    hass.services.async_register(DOMAIN, "start_shot", _handle_start_shot)
+    hass.services.async_register(DOMAIN, "stop_shot", _handle_stop_shot)
     return True
 
 

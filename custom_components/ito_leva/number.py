@@ -10,7 +10,7 @@ from __future__ import annotations
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -47,6 +47,7 @@ class ItoLevaSetpoint(NumberEntity):
             async_dispatcher_connect(self.hass, SIGNAL_TELEMETRY, self._handle_update)
         )
 
+    @callback
     def _handle_update(self, *args) -> None:
         self.async_write_ha_state()
 

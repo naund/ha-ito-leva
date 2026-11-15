@@ -1,0 +1,4 @@
+# Home Assistant integration test environment (HA 2026.10.4).
+# The pytest-homeassistant-custom-component pin deliberately pins the
+# matching Home Assistant version; keep it aligned with the live instance.
+pytest-homeassistant-custom-component==0.13.375

@@ -29,7 +29,10 @@
       "volume": { "name": "Volume" },
       "timer": { "name": "Shot timer" },
       "alarm": { "name": "Alarm" },
-      "connection": { "name": "Connection" }
+      "connection": { "name": "Connection" },
+      "setup_pid_control": { "name": "PID control (setup)" },
+      "setup_pid_setpoint": { "name": "PID setpoint (setup)" },
+      "setup_temp_type": { "name": "Temperature sensor type (setup)" }
     },
     "button": {
       "start_shot": { "name": "Start shot" },
@@ -45,7 +48,7 @@
       "dose": { "name": "Fire active dose" }
     },
     "number": {
-      "setpoint": { "name": "Setpoint" }
+      "setpoint": { "name": "Setpoint (control)" }
     },
     "text": {
       "lcd_mirror": { "name": "LCD mirror" },

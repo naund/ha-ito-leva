@@ -72,9 +72,12 @@ class Telemetry:
     volume: Optional[float] = None  # ml
     weight: Optional[float] = None  # g, from scale (Waage)
     temp: Optional[float] = None  # C, group temp
-    setpoint: Optional[float] = None  # C target (LCD only; rich has no setpoint)
+    setpoint: Optional[float] = None  # C target (vendor field at=13)
+    pid_on: Optional[bool] = None  # PID control type != OFF
+    pid_control: Optional[str] = None  # raw control type: PID | OFF
     timer: Optional[float] = None  # s, shot elapsed
     shot_running: bool = False
     active_profile: Optional[str] = None
     alarm: Optional[str] = None  # last [TOKEN], e.g. REFILL, DSCALE
+    lcd_rows: list[str] = field(default_factory=list)  # persisted LCD mirror
     raw: dict[str, Any] = field(default_factory=dict)

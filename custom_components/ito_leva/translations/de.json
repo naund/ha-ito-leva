@@ -29,7 +29,10 @@
       "volume": { "name": "Volumen" },
       "timer": { "name": "Shot-Timer" },
       "alarm": { "name": "Alarm" },
-      "connection": { "name": "Verbindung" }
+      "connection": { "name": "Verbindung" },
+      "setup_pid_control": { "name": "PID-Regelung (Setup)" },
+      "setup_pid_setpoint": { "name": "PID-Sollwert (Setup)" },
+      "setup_temp_type": { "name": "Temperatursensor-Typ (Setup)" }
     },
     "button": {
       "start_shot": { "name": "Shot starten" },
@@ -45,7 +48,7 @@
       "dose": { "name": "Aktive Dosis beziehen" }
     },
     "number": {
-      "setpoint": { "name": "Sollwert" }
+      "setpoint": { "name": "Sollwert (Regler)" }
     },
     "text": {
       "lcd_mirror": { "name": "LCD-Spiegel" },

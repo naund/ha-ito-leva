@@ -30,7 +30,8 @@ def _rich_body(overrides: dict[int, str] | None = None) -> str:
     body = list("?" * 290)
     fields = {
         3: "*",
-        5: "OFF",
+        5: "PID",
+        14: "094.2",
         153: "042",
         156: "02622",
         175: "093.50",
@@ -64,6 +65,9 @@ def test_rich_pulling_frame():
     assert sample["weight"] == 107.5
     assert sample["flow_ml"] == 2.46
     assert sample["active_profile_name"] == "Declining"
+    assert sample["setpoint"] == 94.2
+    assert sample["pid_on"] is True
+    assert sample["pid_control"] == "PID"
 
 
 def test_rich_idle_frame():
@@ -82,11 +86,22 @@ def test_rich_wait_frame():
 
 
 def test_rich_unavailable_fields_are_none():
+    # A fully '?' frame is what the firmware sends in STANDBY.
     sample = parse_rich_frame("{" + "?" * 290 + "}")
     assert sample is not None
     assert sample["pressure"] is None
     assert sample["temp"] is None
-    assert sample["state"] == "IDLE"
+    assert sample["setpoint"] is None
+    assert sample["state"] == "STANDBY"
+
+
+def test_rich_pid_off_and_setpoint_validation():
+    sample = parse_rich_frame(
+        "{" + _rich_body({3: "-", 5: "OFF", 14: "xxx.x"}) + "}"
+    )
+    assert sample is not None
+    assert sample["pid_on"] is False
+    assert sample["setpoint"] is None
 
 
 def test_lcd_glyph_rendering():
@@ -107,6 +122,16 @@ def test_lcd_home_frame():
     assert sample["pressure"] == 9.0
     assert sample["temp"] == 93.5
     assert sample["timer"] == 23.0
+
+
+def test_lcd_temp_without_decimals():
+    row3 = " 85\xdf  0.0b   0s "
+    assert len(row3) == 16
+    frame = "<102" + "LEVER F".ljust(16) + "1: 85\xdf".ljust(16) + row3 + " 0.0b-  0s   0ml" + ">"
+    sample = parse_lcd_frame(frame)
+    assert sample is not None
+    assert sample["temp"] == 85.0
+    assert sample["pressure"] == 0.0
 
 
 def test_lcd_state_rules():
@@ -141,3 +166,15 @@ def test_mcu_tree_depth_parsing():
     assert tree["PID 1"]["Control"] == "PID"
     assert tree["PID 1"]["Setpoint"] == "93.0"
     assert tree["Sensors"]["Temperature"]["Type"] == "NTC"
+
+
+def test_mcu_tree_skips_telemetry_frames():
+    tree = parse_mcu_tree(
+        [
+            "PID 1...",
+            "| Control     PID",
+            "{" + "?" * 20 + "}",
+            "<102LCD ROW>",
+        ]
+    )
+    assert tree == {"PID 1": {"Control": "PID"}}

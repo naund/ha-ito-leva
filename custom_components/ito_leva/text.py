@@ -14,7 +14,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, ENTITY_IDS
 from .coordinator import SIGNAL_TELEMETRY, ItoLevaCoordinator
 
 
@@ -34,6 +34,7 @@ async def async_setup_entry(
 class _Base(TextEntity):
     _attr_should_poll = False
     _attr_mode = "text"
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator: ItoLevaCoordinator, device: DeviceInfo) -> None:
         self._coordinator = coordinator
@@ -53,6 +54,7 @@ class _Base(TextEntity):
 
 
 class ItoLevaLcdMirror(_Base):
+    entity_id = ENTITY_IDS["lcd"]
     _attr_translation_key = "lcd_mirror"
     _attr_icon = "mdi:monitor"
 
@@ -62,11 +64,14 @@ class ItoLevaLcdMirror(_Base):
 
     @property
     def native_value(self) -> str | None:
-        rows = (self._coordinator.data.raw or {}).get("rows")
-        return "\n".join(rows) if rows else None
+        rows = self._coordinator.data.lcd_rows
+        if not rows or not any(row.strip() for row in rows):
+            return None
+        return "\n".join(rows)
 
 
 class ItoLevaActiveProfile(_Base):
+    entity_id = ENTITY_IDS["active_profile"]
     _attr_translation_key = "active_profile"
     _attr_icon = "mdi:account"
 

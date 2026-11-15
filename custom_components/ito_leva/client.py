@@ -7,8 +7,10 @@ Protocol behaviour ported from proxy.js:
 * `asyncio.Lock` only around LONG operations (MCu dump); short button
   presses complete in ms and skip the lock (same rule as withItoLock)
 * press = `MC<byte>\\r`, release `MC\\x00\\r` after 30 ms
-* start = MCa-wake (x3) -> CANCEL out of MENU (x4) -> Shortcut[1] `\\x05`;
-  stop = OK `\\x03`; after MCu/wake re-arm stream with `MCr\\r`
+* start = MCa-wake -> CANCEL out of MENU (x4) -> active dose `MCcDOSE`
+  (the user-defined Shortcut[1] is FLUSH on this machine and must not be
+  used); stop = OK `\\x03` only while a program is actually running;
+  after MCu/wake re-arm stream with `MCr\\r`
 
 The client emits parsed frames via callbacks so `coordinator.py` (which owns
 HA state) stays the only HA-coupled consumer. Pure parsing lives in
@@ -29,7 +31,7 @@ from .const import (
     BTN_CANCEL,
     BTN_OK,
     BTN_RELEASE,
-    BTN_SHORTCUT_1,
+    CMD_DOSE,
     CMD_DUMP_SETUP,
     CMD_PROBE,
     CMD_RICH,
@@ -43,6 +45,7 @@ from .const import (
     START_STEP_WAIT,
     START_WAKE_RETRIES,
     START_WAKE_WAIT,
+    STOP_STATES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +77,7 @@ class ItoLevaClient:
         self._mcu_capture: list[str] | None = None
         self.recent_lines: deque[tuple[float, str]] = deque(maxlen=30)
         self.state = "UNKNOWN"  # last known machine state (busy checks)
+        self._connect_error: Exception | None = None
 
     # -- lifecycle ------------------------------------------------------
 
@@ -95,6 +99,23 @@ class ItoLevaClient:
         self._tasks = []
         await self._close_socket()
 
+    async def wait_ready(self, timeout: float = 10.0) -> bool:
+        """Wait for TCP connect + rich handshake; False on timeout/error.
+
+        Used by setup and the config flow so an unreachable machine produces
+        ConfigEntryNotReady / a form error instead of a silently loaded
+        config entry with no data.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if self._handshake == "ready" and self._writer is not None:
+                return True
+            if self._connect_error is not None:
+                return False
+            await asyncio.sleep(0.05)
+        return False
+
     async def _close_socket(self) -> None:
         if self._writer is not None:
             try:
@@ -115,6 +136,7 @@ class ItoLevaClient:
                 raise
             except (OSError, asyncio.TimeoutError) as err:
                 _LOGGER.warning("ITO connection failed: %s", err)
+                self._connect_error = err
             if self._running:
                 self._notify_connection(False)
                 await asyncio.sleep(RECONNECT_DELAY)
@@ -124,6 +146,7 @@ class ItoLevaClient:
         self._reader, self._writer = await asyncio.wait_for(
             asyncio.open_connection(self.host, self.port), SOCKET_TIMEOUT
         )
+        self._connect_error = None
         self._handshake = "identify"
         self._write_line(CMD_PROBE)
         self._notify_connection(True)
@@ -165,7 +188,7 @@ class ItoLevaClient:
         """Route one wire line: handshake, MCu capture, alarms, telemetry."""
         self.recent_lines.append((time.monotonic(), line))
 
-        if self._mcu_capture is not None and not line.startswith("<"):
+        if self._mcu_capture is not None and not line.startswith(("<", "{")):
             cleaned = "".join(c for c in line if 32 <= ord(c) <= 126).strip()
             if len(cleaned) > 2:
                 self._mcu_capture.append(cleaned)
@@ -254,33 +277,56 @@ class ItoLevaClient:
 
     # -- Phase 1 operations -------------------------------------------------
 
-    async def start_shot(self) -> None:
-        """Robust start: wake from STANDBY, leave MENU, fire Shortcut[1].
+    async def wake(self) -> None:
+        """Wake from STANDBY and re-arm the rich stream.
 
-        Ports proxy.js startShot(): MCa up to 3x (600 ms apart, re-arm MCr
-        after each wake because MCa drops the rich stream), then CANCEL up
-        to 4x out of MENU, then MC\\x05 press. State checks gate each step;
-        when already IDLE the shot fires immediately.
+        MCa up to START_WAKE_RETRIES times, 600 ms apart, re-sending MCr
+        because MCa drops the rich stream. Returns once a non-STANDBY frame
+        arrived (or after the retries, so a slow wake cannot block forever).
+        The explicit Wake button sends MCa directly and thereby also leaves
+        eco mode (which keeps the machine IDLE at a lowered setpoint).
         """
         for _ in range(START_WAKE_RETRIES):
             if self.state != "STANDBY":
-                break
-            _LOGGER.info("Start: STANDBY -> MCa wake")
+                return
+            _LOGGER.info("Wake: STANDBY -> MCa")
             self.send_command(CMD_WAKE)
             await asyncio.sleep(0.2)
             self._write_raw(CMD_RICH)
             await asyncio.sleep(START_WAKE_WAIT)
+
+    async def leave_menu(self) -> None:
+        """Press CANCEL until the home screen is back (state != MENU)."""
         for _ in range(START_MENU_EXITS):
             if self.state != "MENU":
-                break
-            _LOGGER.info("Start: MENU -> CANCEL")
+                return
+            _LOGGER.info("MENU -> CANCEL")
             await self.press_button(BTN_CANCEL)
             await asyncio.sleep(START_STEP_WAIT)
-        _LOGGER.info("Start: firing Shortcut[1] (state=%s)", self.state)
-        await self.press_button(BTN_SHORTCUT_1)
+
+    async def start_shot(self) -> None:
+        """Robust start: wake from STANDBY, leave MENU, fire the active dose.
+
+        The user-defined Shortcut[1] is FLUSH on the reference machine, so
+        the firmware's own "fire active dose" command is used instead. State
+        checks gate wake/menu steps; when already IDLE the dose fires directly.
+        """
+        await self.wake()
+        await self.leave_menu()
+        _LOGGER.info("Start: firing active dose (state=%s)", self.state)
+        self.send_command(CMD_DOSE)
+        await asyncio.sleep(START_STEP_WAIT)
 
     async def stop_shot(self) -> None:
-        """Stop a running shot (OK button, proxy.js stopShot)."""
+        """Stop the running program (OK), but never press OK while idle.
+
+        In IDLE/MENU the OK button opens the menu, which is why the old
+        unconditional stop left the machine in MENU. WAIT is included so a
+        frozen post-shot result can be dismissed.
+        """
+        if self.state not in STOP_STATES:
+            _LOGGER.info("Stop ignored: no active program (state=%s)", self.state)
+            return
         await self.press_button(BTN_OK)
 
     async def adjust_setpoint(self, steps: int) -> None:

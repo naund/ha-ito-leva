@@ -1,9 +1,9 @@
 """Button platform (Phase 1 daily operation + cleaning).
 
-* start_shot: fires MCcDOSE/Shortcut[1] via client.start_shot(), then the
-  3 s watchdog waits for PULLING/BREWING; on timeout a
+* start_shot: fires the active dose (MCcDOSE) via client.start_shot(), then
+  the 3 s watchdog waits for PULLING/BREWING; on timeout a
   persistent_notification is raised (shot error).
-* stop_shot: OK button (\\x03).
+* stop_shot: OK button (\\x03), only while a program is running.
 * flush / warmup / pump_pb / backflush / descale: single-shot MCc commands,
   no lock needed (milliseconds).
 * wake / standby / eco: power-state helpers replacing the old YAML telnet
@@ -33,6 +33,7 @@ from .const import (
     CMD_WAKE,
     CMD_WARMUP,
     DOMAIN,
+    ENTITY_IDS,
     SHOT_WATCHDOG_TIMEOUT,
 )
 from .coordinator import ItoLevaCoordinator
@@ -75,6 +76,7 @@ class ItoLevaSimpleButton(ButtonEntity):
     """Fire-and-forget MCc command (translation_key -> translations/*.json)."""
 
     _attr_should_poll = False
+    _attr_has_entity_name = True
 
     def __init__(
         self, coordinator: ItoLevaCoordinator, device: DeviceInfo,
@@ -86,6 +88,7 @@ class ItoLevaSimpleButton(ButtonEntity):
         self._attr_translation_key = key
         self._attr_icon = icon
         self._attr_unique_id = f"{DOMAIN}_{key}"
+        self.entity_id = ENTITY_IDS[key]
 
     async def async_press(self) -> None:
         self._coordinator.client.send_command(self._command)
@@ -97,6 +100,8 @@ class ItoLevaStartShot(ButtonEntity):
     _attr_translation_key = "start_shot"
     _attr_icon = "mdi:play"
     _attr_should_poll = False
+    _attr_has_entity_name = True
+    entity_id = ENTITY_IDS["start_shot"]
 
     def __init__(self, coordinator: ItoLevaCoordinator, device: DeviceInfo) -> None:
         self._coordinator = coordinator
@@ -129,6 +134,8 @@ class ItoLevaStopShot(ButtonEntity):
     _attr_translation_key = "stop_shot"
     _attr_icon = "mdi:stop"
     _attr_should_poll = False
+    _attr_has_entity_name = True
+    entity_id = ENTITY_IDS["stop_shot"]
 
     def __init__(self, coordinator: ItoLevaCoordinator, device: DeviceInfo) -> None:
         self._coordinator = coordinator

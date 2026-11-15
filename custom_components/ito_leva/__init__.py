@@ -9,16 +9,83 @@ Services (services.yaml):
 from __future__ import annotations
 
 import logging
+from functools import partial
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 
-from . import parsers
-from .const import DOMAIN, PLATFORMS
+from .const import CONNECT_TIMEOUT, DOMAIN, ENTITY_IDS, PLATFORMS
 from .coordinator import ItoLevaCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+SERVICES = ("refresh_setup", "start_shot", "stop_shot")
+
+
+def _active_coordinator(hass: HomeAssistant) -> ItoLevaCoordinator:
+    """Return the coordinator of the configured machine.
+
+    The manifest declares `single_config_entry`, but resolving dynamically
+    keeps the service handlers correct even if an entry is unloading.
+    """
+    coordinators = hass.data.get(DOMAIN, {})
+    if not coordinators:
+        raise HomeAssistantError("ITO Leva! ist nicht eingerichtet")
+    return next(iter(coordinators.values()))
+
+
+async def _handle_refresh_setup(hass: HomeAssistant, _call: ServiceCall) -> None:
+    """Service ito_leva.refresh_setup: MCu dump -> setup_tree."""
+    await _active_coordinator(hass).async_refresh_setup()
+
+
+async def _handle_start_shot(hass: HomeAssistant, _call: ServiceCall) -> None:
+    """Service ito_leva.start_shot: same sequence as the start button."""
+    await _active_coordinator(hass).client.start_shot()
+
+
+async def _handle_stop_shot(hass: HomeAssistant, _call: ServiceCall) -> None:
+    """Service ito_leva.stop_shot: same sequence as the stop button."""
+    await _active_coordinator(hass).client.stop_shot()
+
+
+def _register_services(hass: HomeAssistant) -> None:
+    """Register the global services exactly once (not per config entry)."""
+    handlers = {
+        "refresh_setup": _handle_refresh_setup,
+        "start_shot": _handle_start_shot,
+        "stop_shot": _handle_stop_shot,
+    }
+    for name, handler in handlers.items():
+        if not hass.services.has_service(DOMAIN, name):
+            hass.services.async_register(DOMAIN, name, partial(handler, hass))
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate v1 host-based entity IDs to the stable dashboard IDs."""
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        registry = er.async_get(hass)
+        for reg in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if reg.platform != DOMAIN:
+                continue
+            suffix = reg.unique_id.removeprefix(f"{DOMAIN}_")
+            target = ENTITY_IDS.get(suffix)
+            if not target or reg.entity_id == target:
+                continue
+            if registry.async_get(target) is not None:
+                _LOGGER.warning(
+                    "Cannot migrate %s to %s: target ID already exists",
+                    reg.entity_id,
+                    target,
+                )
+                continue
+            registry.async_update_entity(reg.entity_id, new_entity_id=target)
+        hass.config_entries.async_update_entry(entry, version=2)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -27,31 +94,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     port: int = entry.data["port"]
     coordinator = ItoLevaCoordinator(hass, host, port)
 
-    try:
-        await coordinator.async_start()
-    except (OSError, TimeoutError) as err:
-        raise ConfigEntryNotReady(f"ITO at {host}:{port} unreachable: {err}") from err
+    await coordinator.async_start()
+    if not await coordinator.client.wait_ready(CONNECT_TIMEOUT):
+        await coordinator.async_stop()
+        raise ConfigEntryNotReady(
+            f"ITO at {host}:{port} did not reach the rich telemetry handshake"
+        )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    _register_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, list(PLATFORMS))
-
-    async def _handle_refresh_setup(_call: ServiceCall) -> None:
-        """Service ito_leva.refresh_setup: MCu dump -> setup_tree."""
-        lines = await coordinator.client.dump_setup()
-        coordinator.setup_tree = parsers.parse_mcu_tree(lines)
-        _LOGGER.info("Setup tree refreshed (%d lines)", len(lines))
-
-    async def _handle_start_shot(_call: ServiceCall) -> None:
-        """Service ito_leva.start_shot: same sequence as the start button."""
-        await coordinator.client.start_shot()
-
-    async def _handle_stop_shot(_call: ServiceCall) -> None:
-        """Service ito_leva.stop_shot: same sequence as the stop button."""
-        await coordinator.client.stop_shot()
-
-    hass.services.async_register(DOMAIN, "refresh_setup", _handle_refresh_setup)
-    hass.services.async_register(DOMAIN, "start_shot", _handle_start_shot)
-    hass.services.async_register(DOMAIN, "stop_shot", _handle_stop_shot)
     return True
 
 
@@ -59,7 +111,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Close the TCP connection and unload platforms."""
     coordinator: ItoLevaCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
     await coordinator.async_stop()
-    hass.services.async_remove(DOMAIN, "refresh_setup")
-    hass.services.async_remove(DOMAIN, "start_shot")
-    hass.services.async_remove(DOMAIN, "stop_shot")
+    if not hass.data[DOMAIN]:
+        # Services are global; only remove them when the last entry is gone.
+        for name in SERVICES:
+            hass.services.async_remove(DOMAIN, name)
     return await hass.config_entries.async_unload_platforms(entry, list(PLATFORMS))

@@ -7,7 +7,9 @@ Positions are 1-indexed *frame* positions; the body inside `{ ... }` is
 
 Frame layout (verified live 2026-04, see proxy.js header comment):
   Pos  3        profile marker: '-' idle, '*' shot running, letter = profile
-  Pos  5-7      PID 1 status ('OFF' / 'ON ')
+  Pos  5-7      PID 1 control type ('PID' / 'OFF'), vendor field at=4
+  Pos  8-13     PID 1 boiler temperature, vendor field at=7
+  Pos 14-18     PID 1 setpoint, vendor field at=13
   Pos 153-155  volume, ml (3 digits, flow meter)
   Pos 156-160  ticks, 5-digit 100 Hz shot counter (timer s = ticks // 100)
   Pos 175-180  boiler temp, C ("NNN.NN")
@@ -79,8 +81,16 @@ def parse_rich_frame(line: str) -> Optional[dict]:
     if marker and marker not in ("-", "*"):
         active_profile = marker
 
-    pid_status = _rich_field(body, 5, 3)
-    pid_on = pid_status.strip() == "ON" if pid_status else None
+    # Vendor field at=4 is the PID *control type* ("PID" or "OFF"), not an
+    # ON/OFF status word. Everything except "OFF" means the PID is active.
+    pid_control = _rich_field(body, 5, 3)
+    pid_control = pid_control.strip() if pid_control else None
+    pid_on = None if pid_control is None else pid_control.upper() != "OFF"
+
+    # Vendor field at=13 carries the PID 1 setpoint (e.g. "094.2").
+    setpoint = _parse_float(_rich_field(body, 14, 5))
+    if setpoint is not None and not 0 < setpoint < 200:
+        setpoint = None
 
     volume_raw = _rich_field(body, 153, 3)
     volume = int(volume_raw) if volume_raw and volume_raw.strip().isdigit() else None
@@ -110,8 +120,12 @@ def parse_rich_frame(line: str) -> Optional[dict]:
     active_profile_name = (_rich_field(body, 273, 9) or "").strip() or None
 
     # State inference (proxy.js): '*' is definitive PULLING; a leftover
-    # timer without '*' is the frozen post-shot result (WAIT); else IDLE.
-    if shot_running:
+    # timer without '*' is the frozen post-shot result (WAIT). A completely
+    # '?' filled frame (no marker at all) means the machine is in STANDBY:
+    # it then keeps streaming unusable frames instead of going silent.
+    if marker is None:
+        state = "STANDBY"
+    elif shot_running:
         state = "PULLING"
     elif timer is not None and timer > 0:
         state = "WAIT"
@@ -124,6 +138,9 @@ def parse_rich_frame(line: str) -> Optional[dict]:
         "pressure_low": pressure_low,
         "pressure_high": pressure_high,
         "temp": temp,
+        "setpoint": setpoint,
+        "pid_on": pid_on,
+        "pid_control": pid_control,
         "volume": float(volume) if volume is not None else None,
         "timer": float(timer) if timer is not None else None,
         "timer_frac": timer_frac,
@@ -134,7 +151,6 @@ def parse_rich_frame(line: str) -> Optional[dict]:
         "active_profile": active_profile,
         "active_profile_name": active_profile_name,
         "profile_slot_names": slot_names,
-        "pid_on": pid_on,
         "rich": True,
     }
 
@@ -144,9 +160,9 @@ def parse_rich_frame(line: str) -> Optional[dict]:
 _LCD_PULLING_RE = re.compile(r"R\s*=|Q\s*=")
 _LCD_TIMER_ML_RE = re.compile(r"[1-9]\d*s\s+\d+(?:\.\d+)?ml\s*$")
 _LCD_TIMER_G_RE = re.compile(r"[1-9]\d*s\s+\d+\.\d+g\s*$")
-_LCD_PRESSURE_RE = re.compile(r"(\d+\.?\d*)b")
-_LCD_TEMP_DEG_RE = re.compile(r"(\d+\.\d+)\s*\xdf")
-_LCD_TEMP_ASCII_RE = re.compile(r"b\s+(\d+\.\d+)\s+\d+\s*s")
+_LCD_PRESSURE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b")
+_LCD_TEMP_DEG_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:\xdf|\u00b0)")
+_LCD_TEMP_ASCII_RE = re.compile(r"b\s+(\d+(?:\.\d+)?)\s+\d+\s*s")
 _LCD_VOLUME_RE = re.compile(r"\s(\d+)\s*ml(?:\s*>)?\s*$")
 _LCD_TIMER_RE = re.compile(r"(?:^|\s)(\d+)s(?=\s|>|$)")
 _LCD_WEIGHT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*g\b")
@@ -173,7 +189,8 @@ def classify_lcd_state(inner: str) -> str:
     if "FLUSH" in upper:
         return "FLUSHING"
     if "ECO" in upper:
-        return "STANDBY"
+        # Eco keeps the machine awake at a lowered setpoint; it is not standby.
+        return "IDLE"
     if _LCD_TIMER_ML_RE.search(inner):
         return "WAIT"
     return "IDLE"
@@ -207,6 +224,14 @@ def parse_lcd_frame(raw: str) -> Optional[dict]:
             temp = candidate
     if temp is None:
         fallback_m = _LCD_TEMP_ASCII_RE.search(inner)
+        if fallback_m:
+            candidate = float(fallback_m.group(1))
+            if 0 < candidate < 200:
+                temp = candidate
+    if temp is None:
+        # Some firmware builds omit the decimal on the home screen ("85°")
+        # or render the degree glyph in a row the raw regex above misses.
+        fallback_m = _LCD_TEMP_DEG_RE.search(" ".join(rows))
         if fallback_m:
             candidate = float(fallback_m.group(1))
             if 0 < candidate < 200:
@@ -287,7 +312,9 @@ def parse_mcu_tree(lines: list[str]) -> dict:
     stack: list[dict] = [root]
     for raw in lines:
         stripped = raw.strip()
-        if not stripped or stripped.startswith("<"):
+        # Skip LCD frames and rich telemetry frames that the firmware emits
+        # while the MCu dump is running; they are not setup-tree nodes.
+        if not stripped or stripped.startswith(("<", "{", "?")):
             continue
         depth = 0
         rest = raw

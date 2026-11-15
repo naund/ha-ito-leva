@@ -19,8 +19,14 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import SIGNAL_ALARM, SIGNAL_CONNECTION, SIGNAL_TELEMETRY, ItoLevaCoordinator
+from .const import DOMAIN, ENTITY_IDS
+from .coordinator import (
+    SIGNAL_ALARM,
+    SIGNAL_CONNECTION,
+    SIGNAL_SETUP,
+    SIGNAL_TELEMETRY,
+    ItoLevaCoordinator,
+)
 
 
 async def async_setup_entry(
@@ -46,6 +52,9 @@ async def async_setup_entry(
             ItoLevaTimerSensor(coordinator, device),
             ItoLevaAlarmSensor(coordinator, device),
             ItoLevaConnectionSensor(coordinator, device),
+            ItoLevaSetupControlSensor(coordinator, device),
+            ItoLevaSetupSetpointSensor(coordinator, device),
+            ItoLevaSetupTempTypeSensor(coordinator, device),
         ]
     )
 
@@ -54,6 +63,7 @@ class ItoLevaSensor(SensorEntity):
     """Base: subscribes to coordinator signals, reads coordinator.data."""
 
     _attr_should_poll = False
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator: ItoLevaCoordinator, device: DeviceInfo) -> None:
         self._coordinator = coordinator
@@ -80,6 +90,7 @@ class ItoLevaSensor(SensorEntity):
 
 
 class ItoLevaStateSensor(ItoLevaSensor):
+    entity_id = ENTITY_IDS["state"]
     _attr_translation_key = "state"
     _attr_icon = "mdi:coffee-maker"
 
@@ -93,6 +104,7 @@ class ItoLevaStateSensor(ItoLevaSensor):
 
 
 class ItoLevaPressureSensor(ItoLevaSensor):
+    entity_id = ENTITY_IDS["pressure"]
     _attr_translation_key = "pressure"
     _attr_device_class = SensorDeviceClass.PRESSURE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -111,6 +123,7 @@ class ItoLevaPressureSensor(ItoLevaSensor):
 class ItoLevaFlowWeightSensor(ItoLevaSensor):
     """Flow from the scale/Waage in g/s (derived from weight deltas)."""
 
+    entity_id = ENTITY_IDS["flow_weight"]
     _attr_translation_key = "flow_weight"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "g/s"
@@ -128,6 +141,7 @@ class ItoLevaFlowWeightSensor(ItoLevaSensor):
 class ItoLevaFlowMeterSensor(ItoLevaSensor):
     """Flow from the flow meter in ml/s (rich-frame / LCD R= field)."""
 
+    entity_id = ENTITY_IDS["flow_meter"]
     _attr_translation_key = "flow_meter"
     _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -144,6 +158,7 @@ class ItoLevaFlowMeterSensor(ItoLevaSensor):
 
 
 class ItoLevaTempSensor(ItoLevaSensor):
+    entity_id = ENTITY_IDS["temp"]
     _attr_translation_key = "temp"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -162,6 +177,7 @@ class ItoLevaTempSensor(ItoLevaSensor):
 class ItoLevaSetpointSensor(ItoLevaSensor):
     """Setpoint mirror (read-only display; editing goes via number entity)."""
 
+    entity_id = ENTITY_IDS["setpoint"]
     _attr_translation_key = "setpoint"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -180,6 +196,7 @@ class ItoLevaSetpointSensor(ItoLevaSensor):
 class ItoLevaWeightSensor(ItoLevaSensor):
     """Cup weight from the Bluetooth scale (DE: Waage)."""
 
+    entity_id = ENTITY_IDS["weight"]
     _attr_translation_key = "weight"
     _attr_device_class = SensorDeviceClass.WEIGHT
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -196,9 +213,10 @@ class ItoLevaWeightSensor(ItoLevaSensor):
 
 
 class ItoLevaVolumeSensor(ItoLevaSensor):
+    entity_id = ENTITY_IDS["volume"]
     _attr_translation_key = "volume"
     _attr_device_class = SensorDeviceClass.VOLUME
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # VOLUME only allows TOTAL/TOTAL_INCREASING; MEASUREMENT is rejected.
     _attr_native_unit_of_measurement = UnitOfVolume.MILLILITERS
     _attr_suggested_display_precision = 0
 
@@ -212,6 +230,7 @@ class ItoLevaVolumeSensor(ItoLevaSensor):
 
 
 class ItoLevaTimerSensor(ItoLevaSensor):
+    entity_id = ENTITY_IDS["timer"]
     _attr_translation_key = "timer"
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -230,6 +249,7 @@ class ItoLevaTimerSensor(ItoLevaSensor):
 class ItoLevaAlarmSensor(ItoLevaSensor):
     """Last firmware alarm token ([REFILL], [DSCALE]=Entkalken, …)."""
 
+    entity_id = ENTITY_IDS["alarm"]
     _attr_translation_key = "alarm"
     _attr_icon = "mdi:alert"
 
@@ -243,6 +263,7 @@ class ItoLevaAlarmSensor(ItoLevaSensor):
 
 
 class ItoLevaConnectionSensor(ItoLevaSensor):
+    entity_id = ENTITY_IDS["connection"]
     _attr_translation_key = "connection"
     _attr_icon = "mdi:lan-connect"
 
@@ -253,3 +274,70 @@ class ItoLevaConnectionSensor(ItoLevaSensor):
     @property
     def native_value(self):
         return "connected" if self._coordinator.connected else "disconnected"
+
+
+class ItoLevaSetupSensor(ItoLevaSensor):
+    """Read-only value from the MCu setup tree (refresh_setup service)."""
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_SETUP, self._handle_update)
+        )
+
+    def _tree_value(self, *path: str):
+        node = self._coordinator.setup_tree
+        for key in path:
+            if not isinstance(node, dict) or key not in node:
+                return None
+            node = node[key]
+        return node if isinstance(node, str) else None
+
+
+class ItoLevaSetupControlSensor(ItoLevaSetupSensor):
+    entity_id = ENTITY_IDS["setup_pid_control"]
+    _attr_translation_key = "setup_pid_control"
+    _attr_icon = "mdi:tune"
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_setup_pid_control"
+
+    @property
+    def native_value(self):
+        return self._tree_value("PID 1", "Control")
+
+
+class ItoLevaSetupSetpointSensor(ItoLevaSetupSensor):
+    entity_id = ENTITY_IDS["setup_pid_setpoint"]
+    _attr_translation_key = "setup_pid_setpoint"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_setup_pid_setpoint"
+
+    @property
+    def native_value(self):
+        raw = self._tree_value("PID 1", "Setpoint")
+        try:
+            return float(raw) if raw is not None else None
+        except ValueError:
+            return None
+
+
+class ItoLevaSetupTempTypeSensor(ItoLevaSetupSensor):
+    entity_id = ENTITY_IDS["setup_temp_type"]
+    _attr_translation_key = "setup_temp_type"
+    _attr_icon = "mdi:thermometer-check"
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_setup_temp_type"
+
+    @property
+    def native_value(self):
+        return self._tree_value("Sensors", "Temperature", "Type")

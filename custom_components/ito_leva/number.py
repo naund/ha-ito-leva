@@ -7,15 +7,18 @@ last known setpoint. Range 80-100 C covers all sane espresso setpoints.
 
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, ENTITY_IDS, START_STEP_WAIT
 from .coordinator import SIGNAL_TELEMETRY, ItoLevaCoordinator
 
 
@@ -28,6 +31,8 @@ async def async_setup_entry(
 
 
 class ItoLevaSetpoint(NumberEntity):
+    entity_id = ENTITY_IDS["setpoint_number"]
+    _attr_has_entity_name = True
     _attr_translation_key = "setpoint"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_native_min_value = 80.0
@@ -58,9 +63,16 @@ class ItoLevaSetpoint(NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         current = self._coordinator.data.setpoint
         if current is None:
-            # Unknown base: single nudge in the right direction is all we can do.
-            await self._coordinator.client.adjust_setpoint(1 if value > 90 else -1)
-            return
+            # In standby the firmware hides the setpoint behind '?' frames.
+            # Wake first, then use the freshly parsed value as the base.
+            await self._coordinator.client.wake()
+            await self._coordinator.client.leave_menu()
+            await asyncio.sleep(START_STEP_WAIT)
+            current = self._coordinator.data.setpoint
+        if current is None:
+            raise HomeAssistantError(
+                "Sollwert ist noch unbekannt; bitte warten bis Telemetrie empfangen wurde"
+            )
         steps = round((value - current) / 0.1)
         if steps:
             await self._coordinator.client.adjust_setpoint(steps)

@@ -24,6 +24,11 @@ def build_rich(
     weight: float | None = None,
     flow: float | None = None,
     flow_meter: float = 0.0,
+    pressure_sp: float | None = None,
+    phase: int | None = None,
+    phase_bias: int | None = None,
+    phase_p: int | None = None,
+    phase_i: int | None = None,
     profile: str = "TestProf",
 ) -> str:
     body = ["?"] * 287
@@ -41,6 +46,16 @@ def build_rich(
     body[196:201] = list(f"{pressure:05.2f}")   # Pos 198-202
     body[201:206] = list(f"{max(0.0, pressure - 0.2):05.2f}")
     body[206:211] = list(f"{pressure + 0.2:05.2f}")
+    if pressure_sp is not None:
+        body[191:196] = list(f"{pressure_sp:05.2f}")   # Pos 193-197
+    if phase is not None:
+        body[211:214] = list(f"{phase:03d}")           # Pos 213-215
+    if phase_bias is not None:
+        body[214:217] = list(f"{phase_bias:03d}")      # Pos 216-218
+    if phase_p is not None:
+        body[217:221] = list(f"{phase_p:04d}")         # Pos 219-222
+    if phase_i is not None:
+        body[221:225] = list(f"{phase_i:04d}")         # Pos 223-226
     if weight is not None:
         body[225:230] = list(f"{weight:05.1f}")
     if flow is not None:
@@ -216,6 +231,11 @@ class FakeIto:
                     weight=self._weight if self._weight else None,
                     flow=2.4 if self.shot else None,
                     flow_meter=2.4 if self.shot else 0.0,
+                    pressure_sp=9.0 if self.shot else None,
+                    phase=70 if self.shot else None,
+                    phase_bias=52 if self.shot else None,
+                    phase_p=12 if self.shot else None,
+                    phase_i=6 if self.shot else None,
                     pressure=9.0 if self.shot else 0.2,
                     temp=self.temp,
                     setpoint=self.setpoint,

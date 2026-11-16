@@ -149,7 +149,17 @@ services and inspect entity registry/state, as a user would.
   and an entry in the inventory test.
 - `single_config_entry` is set in the manifest. Services are registered once
   globally and removed only when the last entry unloads.
-- Fast telemetry sensors should stay out of the recorder (see README).
+- Fast telemetry sensors should stay out of the recorder (see README). Because
+  of that, the coordinator's in-memory ring (every raw frame, ~4 Hz, ~2-3 min)
+  is the only raw source: `ito_leva.export_recent` writes it to
+  `/config/ito_leva/recent_*.csv` (pressure, flow meter, scale flow, weight,
+  phase/P/I/bias). Use it to compare sensor values or analyse a shot without a
+  second TCP client.
+- `sensor.ito_leva_shot_*` are the recorder-friendly subset: `available` is
+  `connection_enabled and coordinator.shot_active` (`SHOT_ACTIVE_STATES`), so HA
+  stores one `unavailable` row between shots and 1 Hz data during them. Do not
+  exclude them from the recorder; do not make the live fast sensors
+  shot-gated (the dashboard needs them while idle).
 
 ## Setup/robustness expectations
 

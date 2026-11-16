@@ -53,6 +53,12 @@ async def async_setup_entry(
             ItoLevaAlarmSensor(coordinator, device),
             ItoLevaStatusSensor(coordinator, device),
             ItoLevaConnectionSensor(coordinator, device),
+            ItoLevaShotFlowSensor(coordinator, device),
+            ItoLevaShotFlowScaleSensor(coordinator, device),
+            ItoLevaShotVolumeSensor(coordinator, device),
+            ItoLevaShotPressureSensor(coordinator, device),
+            ItoLevaShotPressureSpSensor(coordinator, device),
+            ItoLevaShotPhaseSensor(coordinator, device),
             ItoLevaSetupControlSensor(coordinator, device),
             ItoLevaSetupSetpointSensor(coordinator, device),
             ItoLevaSetupTempTypeSensor(coordinator, device),
@@ -324,9 +330,144 @@ class ItoLevaConnectionSensor(ItoLevaSensor):
         return "connected" if self._coordinator.connected else "disconnected"
 
 
+class ItoLevaShotSensor(ItoLevaSensor):
+    """Base for shot-gated telemetry (recorded only while a program runs).
+
+    The live fast sensors stay out of the recorder (README); these siblings are
+    `unavailable` outside a shot, so Home Assistant writes history and 5-minute
+    statistics only for the ~30 s of a shot (plus the result screen), which
+    keeps the database small while still allowing shot-to-shot comparison.
+    """
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.available and self._coordinator.shot_active
+
+
+class ItoLevaShotFlowSensor(ItoLevaShotSensor):
+    """Machine flow meter in ml/s (LCD `R=`), the value without a scale."""
+
+    entity_id = ENTITY_IDS["shot_flow"]
+    _attr_translation_key = "shot_flow"
+    _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "mL/s"
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_shot_flow"
+
+    @property
+    def native_value(self):
+        return self._coordinator.data.flow_ml
+
+
+class ItoLevaShotFlowScaleSensor(ItoLevaShotSensor):
+    """Flow derived from the Bluetooth scale in g/s (needs a paired scale)."""
+
+    entity_id = ENTITY_IDS["shot_flow_scale"]
+    _attr_translation_key = "shot_flow_scale"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "g/s"
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_shot_flow_scale"
+
+    @property
+    def native_value(self):
+        return self._coordinator.data.flow
+
+
+class ItoLevaShotVolumeSensor(ItoLevaShotSensor):
+    entity_id = ENTITY_IDS["shot_volume"]
+    _attr_translation_key = "shot_volume"
+    _attr_device_class = SensorDeviceClass.VOLUME
+    _attr_native_unit_of_measurement = UnitOfVolume.MILLILITERS
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_shot_volume"
+
+    @property
+    def native_value(self):
+        return self._coordinator.data.volume
+
+
+class ItoLevaShotPressureSensor(ItoLevaShotSensor):
+    entity_id = ENTITY_IDS["shot_pressure"]
+    _attr_translation_key = "shot_pressure"
+    _attr_device_class = SensorDeviceClass.PRESSURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPressure.BAR
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_shot_pressure"
+
+    @property
+    def native_value(self):
+        return self._coordinator.data.pressure
+
+
+class ItoLevaShotPressureSpSensor(ItoLevaShotSensor):
+    """Pressure target of the profile step (vendor at=192)."""
+
+    entity_id = ENTITY_IDS["shot_pressure_sp"]
+    _attr_translation_key = "shot_pressure_sp"
+    _attr_device_class = SensorDeviceClass.PRESSURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPressure.BAR
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_shot_pressure_sp"
+
+    @property
+    def native_value(self):
+        return self._coordinator.data.pressure_sp
+
+
+class ItoLevaShotPhaseSensor(ItoLevaShotSensor):
+    """Pump power as phase angle (0 deg = full power) for PI tuning.
+
+    The controller components (P, I, bias) are exposed as attributes: the
+    manual's tuning method compares them against the pressure error.
+    """
+
+    entity_id = ENTITY_IDS["shot_phase"]
+    _attr_translation_key = "shot_phase"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "°"
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:sine-wave"
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_shot_phase"
+
+    @property
+    def native_value(self):
+        return self._coordinator.data.phase
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self._coordinator.data
+        return {
+            "phase_p": data.phase_p,
+            "phase_i": data.phase_i,
+            "phase_bias": data.phase_bias,
+            "pid_output": data.pid_output,
+        }
+
+
 class ItoLevaSetupSensor(ItoLevaSensor):
     """Read-only value from the MCu setup tree (refresh_setup service)."""
-
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.async_on_remove(

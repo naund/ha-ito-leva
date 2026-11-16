@@ -10,3 +10,21 @@ stop_shot:
   name: Shot stoppen
   description: Stoppt einen laufenden Shot (OK-Taste).
   fields: {}
+export_recent:
+  name: Rohdaten exportieren
+  description: >
+    Schreibt die im Speicher gehaltenen Roh-Frames (voller Takt, ca. 2-3 min)
+    als CSV nach /config/ito_leva/. Enthält Druck, Druck-Sollwert,
+    Pumpenphase/P/I/Bias, Flowmeter, Waagen-Flow, Gewicht und Volumen — also
+    auch die Werte, die der Recorder bei den schnellen Sensoren nicht speichert.
+  fields:
+    minutes:
+      name: Minuten
+      description: Nur die letzten N Minuten exportieren (leer = gesamter Puffer).
+      example: 2
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.5
+          unit_of_measurement: min

@@ -33,7 +33,13 @@
       "connection": { "name": "Verbindung" },
       "setup_pid_control": { "name": "PID-Regelung (Setup)" },
       "setup_pid_setpoint": { "name": "PID-Sollwert (Setup)" },
-      "setup_temp_type": { "name": "Temperatursensor-Typ (Setup)" }
+      "setup_temp_type": { "name": "Temperatursensor-Typ (Setup)" },
+      "shot_flow": { "name": "Shot: Flow (Flowmeter)" },
+      "shot_flow_scale": { "name": "Shot: Flow (Waage)" },
+      "shot_volume": { "name": "Shot: Volumen" },
+      "shot_pressure": { "name": "Shot: Druck" },
+      "shot_pressure_sp": { "name": "Shot: Druck-Sollwert" },
+      "shot_phase": { "name": "Shot: Pumpenphase" }
     },
     "button": {
       "start_shot": { "name": "Shot starten" },
@@ -71,6 +77,10 @@
     "stop_shot": {
       "name": "Shot stoppen",
       "description": "Stoppt einen laufenden Shot (OK-Taste)."
+    },
+    "export_recent": {
+      "name": "Rohdaten exportieren",
+      "description": "Schreibt die Roh-Frames aus dem Speicher als CSV nach /config/ito_leva/ (Druck, Phase, Flow, Gewicht, Volumen)."
     }
   }
 }

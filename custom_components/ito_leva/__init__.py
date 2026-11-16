@@ -12,7 +12,7 @@ import logging
 from functools import partial
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
@@ -21,7 +21,7 @@ from .coordinator import ItoLevaCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-SERVICES = ("refresh_setup", "start_shot", "stop_shot")
+SERVICES = ("refresh_setup", "start_shot", "stop_shot", "export_recent")
 
 
 def _active_coordinator(hass: HomeAssistant) -> ItoLevaCoordinator:
@@ -51,16 +51,29 @@ async def _handle_stop_shot(hass: HomeAssistant, _call: ServiceCall) -> None:
     await _active_coordinator(hass).client.stop_shot()
 
 
+async def _handle_export_recent(hass: HomeAssistant, call: ServiceCall) -> dict:
+    """Service ito_leva.export_recent: write the raw ring buffer to CSV."""
+    minutes = call.data.get("minutes") or None
+    path, frames = await _active_coordinator(hass).async_export_recent(minutes)
+    return {"path": path, "frames": frames}
+
+
 def _register_services(hass: HomeAssistant) -> None:
     """Register the global services exactly once (not per config entry)."""
     handlers = {
         "refresh_setup": _handle_refresh_setup,
         "start_shot": _handle_start_shot,
         "stop_shot": _handle_stop_shot,
+        "export_recent": _handle_export_recent,
     }
     for name, handler in handlers.items():
         if not hass.services.has_service(DOMAIN, name):
-            hass.services.async_register(DOMAIN, name, partial(handler, hass))
+            hass.services.async_register(
+                DOMAIN,
+                name,
+                partial(handler, hass),
+                supports_response=SupportsResponse.OPTIONAL,
+            )
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

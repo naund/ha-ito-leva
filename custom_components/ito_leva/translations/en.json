@@ -33,7 +33,13 @@
       "connection": { "name": "Connection" },
       "setup_pid_control": { "name": "PID control (setup)" },
       "setup_pid_setpoint": { "name": "PID setpoint (setup)" },
-      "setup_temp_type": { "name": "Temperature sensor type (setup)" }
+      "setup_temp_type": { "name": "Temperature sensor type (setup)" },
+      "shot_flow": { "name": "Shot: flow (meter)" },
+      "shot_flow_scale": { "name": "Shot: flow (scale)" },
+      "shot_volume": { "name": "Shot: volume" },
+      "shot_pressure": { "name": "Shot: pressure" },
+      "shot_pressure_sp": { "name": "Shot: pressure target" },
+      "shot_phase": { "name": "Shot: pump phase" }
     },
     "button": {
       "start_shot": { "name": "Start shot" },
@@ -71,6 +77,10 @@
     "stop_shot": {
       "name": "Stop shot",
       "description": "Stops a running shot (OK button)."
+    },
+    "export_recent": {
+      "name": "Export raw telemetry",
+      "description": "Writes the in-memory raw frames to a CSV under /config/ito_leva/ (pressure, phase, flow, weight, volume)."
     }
   }
 }

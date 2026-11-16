@@ -49,11 +49,12 @@ views:
           - entity: button.ito_leva_stop_shot
           - entity: number.ito_leva_setpoint
       - type: history-graph
-        title: Verlauf (1 Hz, Kurzzeit)
-        hours_to_show: 1
+        title: Verlauf (nur während Shots aufgezeichnet)
+        hours_to_show: 6
         entities:
-          - entity: sensor.ito_leva_pressure
-          - entity: sensor.ito_leva_temp
+          - entity: sensor.ito_leva_shot_pressure
+          - entity: sensor.ito_leva_shot_pressure_sp
+          - entity: sensor.ito_leva_shot_flow
   - title: Betrieb
     cards:
       - type: grid

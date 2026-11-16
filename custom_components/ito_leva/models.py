@@ -74,6 +74,11 @@ class Telemetry:
     weight: Optional[float] = None  # g, from scale (Waage)
     temp: Optional[float] = None  # C, group temp
     setpoint: Optional[float] = None  # C target (vendor field at=13)
+    pressure_sp: Optional[float] = None  # bar target (vendor at=192)
+    phase: Optional[float] = None  # pump power, deg (0 = full power)
+    phase_bias: Optional[float] = None
+    phase_p: Optional[float] = None
+    phase_i: Optional[float] = None
     pid_on: Optional[bool] = None  # PID control type != OFF
     pid_control: Optional[str] = None  # raw control type: PID | OFF
     pid_output: Optional[int] = None  # % heat output (vendor field at=18)

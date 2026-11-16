@@ -27,10 +27,13 @@ target jump to the limits in the field test.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
 import re
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -58,6 +61,7 @@ from .const import (
     SETPOINT_STEP_TIMEOUT,
     SETPOINT_TOLERANCE,
     SETUP_INITIAL_DELAY,
+    SHOT_ACTIVE_STATES,
     STATUS_OFFLINE,
     STATUS_STEAM,
     STATUS_WARMUP,
@@ -83,6 +87,38 @@ _LCD_PRIORITY_STATES = {"HEATING", "STANDBY", "MENU", "FLUSHING", "STEAMING"}
 _SETUP_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 _CONNECTION_STORE_VERSION = 1
+
+# Raw-frame export (service ito_leva.export_recent): the ring buffer keeps every
+# frame at full rate (~4 Hz, ~150 s), which is exactly what the recorder does
+# not keep for the fast sensors.
+_EXPORT_KEYS = (
+    "state",
+    "shot_running",
+    "temp",
+    "setpoint",
+    "pid_output",
+    "pressure",
+    "pressure_sp",
+    "pressure_low",
+    "pressure_high",
+    "phase",
+    "phase_bias",
+    "phase_p",
+    "phase_i",
+    "flow_ml",
+    "flow_scale",
+    "flow_tracking",
+    "volume",
+    "weight",
+    "ticks",
+    "timer",
+    "active_profile_name",
+)
+
+
+def _write_text_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 class ItoLevaCoordinator:
@@ -146,6 +182,15 @@ class ItoLevaCoordinator:
         """Entities are unavailable only when the user detached the machine."""
         return self.connection_enabled
 
+    @property
+    def shot_active(self) -> bool:
+        """True while a program runs (or its result is on screen).
+
+        Drives the `sensor.ito_leva_shot_*` entities: they are unavailable
+        otherwise, so the recorder only stores real per-shot data.
+        """
+        return bool(self.data.shot_running) or self.data.state in SHOT_ACTIVE_STATES
+
     async def async_load_connection_state(self) -> None:
         """Restore the connect/disconnect switch across restarts."""
         stored = await self._store.async_load()
@@ -185,6 +230,37 @@ class ItoLevaCoordinator:
             self.data.state = "UNKNOWN"
             self.data.status = STATUS_OFFLINE
         async_dispatcher_send(self.hass, SIGNAL_CONNECTION)
+
+    async def async_export_recent(
+        self, minutes: float | None = None
+    ) -> tuple[str, int]:
+        """Write the in-memory raw frames to a CSV file under the config dir.
+
+        The ring buffer holds every frame at full rate (~4 Hz), including the
+        fields the recorder keeps only as 5-minute statistics (flow, weight,
+        pressure, pump phase). Returns (path, frame count).
+        """
+        now = time.monotonic()
+        since = now - minutes * 60.0 if minutes else None
+        frames = [f for f in self.ring if since is None or f["t"] >= since]
+        if not frames:
+            raise HomeAssistantError("Kein Telemetrie-Puffer vorhanden")
+        t0 = frames[0]["t"]
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(("t_rel",) + _EXPORT_KEYS)
+        for frame in frames:
+            writer.writerow(
+                [round(frame["t"] - t0, 3)]
+                + [frame.get(key) for key in _EXPORT_KEYS]
+            )
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        target = Path(self.hass.config.path("ito_leva")) / f"recent_{stamp}.csv"
+        await self.hass.async_add_executor_job(
+            _write_text_file, target, buffer.getvalue()
+        )
+        _LOGGER.info("Exported %d raw frames to %s", len(frames), target)
+        return str(target), len(frames)
 
     async def async_refresh_setup(self) -> None:
         """Read one MCu dump and notify the setup sensors."""
@@ -368,7 +444,19 @@ class ItoLevaCoordinator:
 
         if is_rich:
             # Rich frames carry the authoritative numeric fields.
-            for key in ("pressure", "temp", "volume", "weight", "flow_ml", "pid_output"):
+            for key in (
+                "pressure",
+                "temp",
+                "volume",
+                "weight",
+                "flow_ml",
+                "pid_output",
+                "pressure_sp",
+                "phase",
+                "phase_bias",
+                "phase_p",
+                "phase_i",
+            ):
                 if sample.get(key) is not None:
                     setattr(data, key, sample[key])
             if sample.get("setpoint") is not None:

@@ -65,6 +65,12 @@ START_STEP_WAIT = 0.15  # s between menu-exit steps
 # ConfigEntryNotReady instead of leaving a "loaded" entry with no data.
 CONNECT_TIMEOUT = 10.0  # s to TCP connect + rich handshake
 
+# Shot-gated sensors (sensor.ito_leva_shot_*). They are unavailable outside a
+# shot, so the HA recorder stores their history/statistics only while a program
+# runs: the fast live sensors stay excluded from the recorder (README), while
+# these give comparable per-shot curves without permanent database growth.
+SHOT_ACTIVE_STATES = ("PULLING", "BREWING", "FLUSHING", "WAIT")
+
 # Shot control guard: OK only makes sense while a program is actually running.
 # WAIT is deliberately NOT included: the firmware keeps the last shot's ticks
 # in the rich frame forever (verified live: ticks frozen at 00758 while the LCD
@@ -169,6 +175,14 @@ ENTITY_IDS: dict[str, str] = {
     "weight": "sensor.ito_leva_weight",
     "volume": "sensor.ito_leva_volume",
     "timer": "sensor.ito_leva_timer",
+    # Shot-gated telemetry: available only while a shot runs, so the recorder
+    # stores these (history + 5-min statistics) without permanent growth.
+    "shot_flow": "sensor.ito_leva_shot_flow",
+    "shot_flow_scale": "sensor.ito_leva_shot_flow_scale",
+    "shot_volume": "sensor.ito_leva_shot_volume",
+    "shot_pressure": "sensor.ito_leva_shot_pressure",
+    "shot_pressure_sp": "sensor.ito_leva_shot_pressure_sp",
+    "shot_phase": "sensor.ito_leva_shot_phase",
     "alarm": "sensor.ito_leva_alarm",
     "status": "sensor.ito_leva_status",
     "connection": "sensor.ito_leva_connection",

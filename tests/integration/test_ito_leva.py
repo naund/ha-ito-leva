@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -36,6 +37,12 @@ SENSOR_IDS = {
     "ito_leva_alarm": "sensor.ito_leva_alarm",
     "ito_leva_status": "sensor.ito_leva_status",
     "ito_leva_connection": "sensor.ito_leva_connection",
+    "ito_leva_shot_flow": "sensor.ito_leva_shot_flow",
+    "ito_leva_shot_flow_scale": "sensor.ito_leva_shot_flow_scale",
+    "ito_leva_shot_volume": "sensor.ito_leva_shot_volume",
+    "ito_leva_shot_pressure": "sensor.ito_leva_shot_pressure",
+    "ito_leva_shot_pressure_sp": "sensor.ito_leva_shot_pressure_sp",
+    "ito_leva_shot_phase": "sensor.ito_leva_shot_phase",
     "ito_leva_setup_pid_control": "sensor.ito_leva_setup_pid_control",
     "ito_leva_setup_pid_setpoint": "sensor.ito_leva_setup_pid_setpoint",
     "ito_leva_setup_temp_type": "sensor.ito_leva_setup_temp_type",
@@ -114,7 +121,7 @@ async def test_config_flow_and_entity_inventory(hass, entry, fake):
     by_domain: dict[str, int] = {}
     for item in items:
         by_domain[item.domain] = by_domain.get(item.domain, 0) + 1
-    assert by_domain == {"sensor": 15, "button": 11, "number": 1, "text": 2, "switch": 1}
+    assert by_domain == {"sensor": 21, "button": 11, "number": 1, "text": 2, "switch": 1}
 
     assert {item.unique_id for item in items} == {
         *SENSOR_IDS,
@@ -410,6 +417,78 @@ async def test_steam_heating_is_a_normal_phase_and_locks_setpoint(hass, entry, f
             "number", "set_value", {"entity_id": eid, "value": 95.0}, blocking=True
         )
     assert fake.commands.count(b"MC+") + fake.commands.count(b"MC-") == before
+
+
+async def test_export_recent_service_writes_csv(hass, entry, fake):
+    """Raw frames (incl. flow/weight/phase) on demand, bypassing the recorder."""
+    await wait_for_frames(hass, fake)
+    fake.shot = True
+    await wait_for_frames(hass, fake, fake.frames_sent + 10)
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        "export_recent",
+        {},
+        blocking=True,
+        return_response=True,
+    )
+    assert response["frames"] >= 10
+    path = Path(response["path"])
+    assert path.exists()
+    text = path.read_text(encoding="utf-8")
+    header = text.splitlines()[0]
+    assert "flow_ml" in header
+    assert "pressure_sp" in header
+    assert "phase" in header
+    # At least one row carries the flow meter value of the running shot.
+    assert any("2.4" in line for line in text.splitlines()[1:])
+
+
+async def test_export_recent_without_data_raises(hass, entry):
+    """Empty buffer (link detached) is a clear error, not an empty file."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    await coordinator.async_set_connection(False)
+    coordinator.ring.clear()
+    await hass.async_block_till_done()
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            "export_recent",
+            {},
+            blocking=True,
+            return_response=True,
+        )
+
+
+async def test_shot_sensors_are_gated_to_the_shot(hass, entry, fake):
+    """Shot telemetry exists only during a program (recorder-friendly)."""
+    await wait_for_frames(hass, fake)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    flow_id = entity_id_for(hass, entry, "ito_leva_shot_flow")
+    phase_id = entity_id_for(hass, entry, "ito_leva_shot_phase")
+
+    assert hass.states.get(flow_id).state == "unavailable"
+    assert hass.states.get(phase_id).state == "unavailable"
+
+    fake.shot = True
+    await wait_for_frames(hass, fake, fake.frames_sent + 10)
+    assert float(hass.states.get(flow_id).state) == pytest.approx(2.41)  # 145*0.0166
+    phase = hass.states.get(phase_id)
+    assert float(phase.state) == pytest.approx(70.0)
+    assert phase.attributes["phase_p"] == 12.0
+    assert phase.attributes["phase_i"] == 6.0
+    assert phase.attributes["phase_bias"] == 52.0
+    assert float(
+        hass.states.get(entity_id_for(hass, entry, "ito_leva_shot_pressure_sp")).state
+    ) == pytest.approx(9.0)
+
+    # End the shot and drop the frozen tick counter -> back to unavailable.
+    fake.shot = False
+    fake._ticks = 0
+    coordinator._last_shot_ts = 0.0
+    await wait_for_frames(hass, fake, fake.frames_sent + 10)
+    assert hass.states.get(flow_id).state == "unavailable"
 
 
 async def test_start_and_stop_shot(hass, entry, fake):

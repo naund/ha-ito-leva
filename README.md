@@ -57,10 +57,53 @@ recorder:
       - sensor.ito_leva_volume
 ```
 
+Damit landen diese Sensoren **nicht** im Verlauf; sichtbar bleibt nur die
+5-Minuten-Langzeitstatistik (More-Info → Statistik). Für den Vergleich
+„Flowmeter vs. Waagen-Flow“ und für das Druckregelungs-Tuning gibt es drei
+Wege:
+
+1. **`ito_leva.export_recent`** — schreibt die Roh-Frames aus dem
+   Coordinator-Speicher (voller Takt ~4 Hz, ca. 2–3 Minuten) als CSV nach
+   `/config/ito_leva/recent_*.csv`, ohne die Recorder-Konfiguration zu ändern.
+   Optional Feld `minutes`. Rückgabe: Pfad und Frame-Anzahl.
+2. **`tools/record_shot.py`** — Rohdaten + Auswertung (Überschwingen,
+   Phasen-Streuung, Flowmeter gegen Volumen-Steigung); dafür
+   `switch.ito_leva_connection` ausschalten (das Modul bedient einen Client).
+3. **Shot-Sensoren `sensor.ito_leva_shot_*`** (siehe unten) — diese sind nur
+   während eines Shots verfügbar und werden deshalb vom Recorder nur dann
+   gespeichert; Verlauf und 5-Minuten-Statistik pro Shot ohne dauerhaftes
+   Datenbankwachstum.
+
+### Shot-Aufzeichnung ohne Datenbank-Wachstum
+
+Sechs Sensoren sind **nur während eines Programms verfügbar** (`PULLING`,
+`BREWING`, `FLUSHING`, `WAIT`), sonst `unavailable`:
+
+| Entity | Inhalt |
+|---|---|
+| `sensor.ito_leva_shot_flow` | Flowmeter, ml/s (das ist der Wert ohne Waage) |
+| `sensor.ito_leva_shot_flow_scale` | Flow aus der Waage, g/s (nur mit Waage) |
+| `sensor.ito_leva_shot_volume` | Volumen, ml |
+| `sensor.ito_leva_shot_pressure` | Druck, bar |
+| `sensor.ito_leva_shot_pressure_sp` | Druck-Sollwert, bar |
+| `sensor.ito_leva_shot_phase` | Pumpenphase, ° — Attribute: `phase_p`, `phase_i`, `phase_bias`, `pid_output` |
+
+Home Assistant schreibt einen State nur bei Änderung: außerhalb eines Shots
+steht die Entität auf `unavailable` (eine Zeile), während des Shots werden die
+1-Hz-Werte aufgezeichnet. Ein 30-s-Shot erzeugt so ca. 200 Zeilen für alle sechs
+Sensoren zusammen. **Diese Entities nicht in `recorder.exclude` aufnehmen** —
+sie sind genau für die Aufzeichnung gedacht. `sensor.ito_leva_flow*` matcht sie
+nicht (Präfix `shot_`), die Live-Sensoren bleiben also weiter draußen.
+
+Die 4-Hz-Rohdaten eines Shots liefert weiterhin `export_recent` bzw.
+`tools/record_shot.py`; die Shot-Sensoren sind die bequeme 1-Hz-Spur für
+Verlauf/Statistik und den Vergleich mehrerer Shots.
+
 ## Dienste
 
 * `ito_leva.refresh_setup` — MCu-Dump neu einlesen (Setup-Sensoren aktualisieren).
 * `ito_leva.start_shot` / `ito_leva.stop_shot` — inkl. Watchdog (3 s auf PULLING/BREWING, sonst Fehler + Notification).
+* `ito_leva.export_recent` — Roh-Frames aus dem Speicher als CSV (`/config/ito_leva/`), Feld `minutes` optional; Rückgabe mit Pfad und Frame-Anzahl.
 
 ## Sollwert ändern (warum es jetzt anders funktioniert)
 

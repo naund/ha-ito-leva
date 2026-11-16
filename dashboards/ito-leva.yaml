@@ -7,9 +7,22 @@ views:
     cards:
       - type: markdown
         content: >
-          ## {{ states('sensor.ito_leva_state') }} · {{
-          states('sensor.ito_leva_timer') }} s · Profil: {{
-          states('text.ito_leva_active_profile') }}
+          ## {{ states('sensor.ito_leva_status') }} · {{
+          states('sensor.ito_leva_temp') }} °C → {{
+          states('number.ito_leva_setpoint') }} °C · {{ states('sensor.ito_leva_state') }}
+          · {{ states('sensor.ito_leva_timer') }} s · Profil: {{
+          states('text.ito_leva_active_profile') }}{% if
+          state_attr('number.ito_leva_setpoint', 'lock_reason') %}
+          🔒 Sollwert gesperrt: {{ state_attr('number.ito_leva_setpoint',
+          'lock_reason') }}{% endif %}
+      - type: entities
+        title: Betriebsstatus
+        entities:
+          - entity: sensor.ito_leva_status
+            name: Status
+          - entity: sensor.ito_leva_connection
+          - entity: switch.ito_leva_connection
+            name: Verbindung zur Maschine
       - type: entities
         title: Live-Werte
         entities:
@@ -72,10 +85,15 @@ views:
             name: Entkalken
             icon: mdi:bottle-tonic
       - type: entities
-        title: Energie & LCD
+        title: Energie & Verbindung
         entities:
           - entity: button.ito_leva_wake
           - entity: button.ito_leva_eco
           - entity: button.ito_leva_standby
-          - entity: text.ito_leva_lcd_mirror
+          - entity: switch.ito_leva_connection
+            name: Verbindung zur Maschine
           - entity: sensor.ito_leva_connection
+          # Der LCD-Spiegel (text.ito_leva_lcd_mirror) braucht den
+          # Display-Modus (MC@); Rich-Modus (MCr) und Display schließen sich
+          # auf der Firmware aus. Deshalb bleibt das Entity im Rich-Betrieb
+          # leer und ist hier absichtlich nicht eingebunden.

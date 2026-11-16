@@ -11,6 +11,8 @@ Protocol behaviour ported from proxy.js:
   (the user-defined Shortcut[1] is FLUSH on this machine and must not be
   used); stop = OK `\\x03` only while a program is actually running;
   after MCu/wake re-arm stream with `MCr\\r`
+* setpoint = single `MC+`/`MC-` presses, verified by the coordinator; the
+  step size is configurable (`MC#`, 0.1/1.0/10 K) and must never be assumed
 
 The client emits parsed frames via callbacks so `coordinator.py` (which owns
 HA state) stays the only HA-coupled consumer. Pure parsing lives in
@@ -35,9 +37,12 @@ from .const import (
     CMD_DUMP_SETUP,
     CMD_PROBE,
     CMD_RICH,
+    CMD_SETPOINT_DOWN,
+    CMD_SETPOINT_UP,
     CMD_WAKE,
     KEEPALIVE_INTERVAL,
     MCU_CAPTURE_TIMEOUT,
+    MCU_QUIET_TIMEOUT,
     PRESS_RELEASE_DELAY,
     RECONNECT_DELAY,
     SOCKET_TIMEOUT,
@@ -76,7 +81,10 @@ class ItoLevaClient:
         self._buffer = ""
         self._mcu_capture: list[str] | None = None
         self.recent_lines: deque[tuple[float, str]] = deque(maxlen=30)
-        self.state = "UNKNOWN"  # last known machine state (busy checks)
+        # Last known machine phase for the busy guards (start/stop/setpoint).
+        # Owned by the coordinator: the parser's raw verdict cannot be trusted
+        # for WAIT (the firmware keeps the last shot's ticks forever).
+        self.state = "UNKNOWN"
         self._connect_error: Exception | None = None
 
     # -- lifecycle ------------------------------------------------------
@@ -214,7 +222,6 @@ class ItoLevaClient:
         if "<" in line and ">" in line:
             sample = parsers.parse_lcd_frame(line)
             if sample is not None:
-                self.state = sample["state"]
                 self._emit(sample, is_rich=False)
                 return
 
@@ -222,7 +229,6 @@ class ItoLevaClient:
         if ascii_line.startswith("{") and ascii_line.endswith("}"):
             sample = parsers.parse_rich_frame(ascii_line)
             if sample is not None:
-                self.state = sample["state"]
                 self._emit(sample, is_rich=True)
 
     def _emit(self, sample: dict, is_rich: bool) -> None:
@@ -321,29 +327,47 @@ class ItoLevaClient:
         """Stop the running program (OK), but never press OK while idle.
 
         In IDLE/MENU the OK button opens the menu, which is why the old
-        unconditional stop left the machine in MENU. WAIT is included so a
-        frozen post-shot result can be dismissed.
+        unconditional stop left the machine in MENU. Only states that carry a
+        running pump are accepted: the rich frame keeps the last shot's tick
+        counter forever, so the stale "WAIT" that used to qualify here is the
+        exact trap that opened the menu and sent later MC+/MC- into it.
         """
         if self.state not in STOP_STATES:
             _LOGGER.info("Stop ignored: no active program (state=%s)", self.state)
             return
         await self.press_button(BTN_OK)
 
-    async def adjust_setpoint(self, steps: int) -> None:
-        """Nudge the setpoint by steps x 0.1 C (firmware is relative-only)."""
-        command = "MC+\r" if steps > 0 else "MC-\r"
-        for _ in range(abs(steps)):
-            self.send_command(command)
-            await asyncio.sleep(0.05)
+    def press_setpoint_step(self, up: bool) -> bool:
+        """Send exactly one MC+/MC- setpoint press.
+
+        One press moves the target by the firmware increment (MC#: 0.1, 1.0 or
+        10 K), so callers must verify the read-back instead of sending a
+        counted burst - see ItoLevaCoordinator.async_set_setpoint.
+        """
+        return self.send_command(CMD_SETPOINT_UP if up else CMD_SETPOINT_DOWN)
 
     async def dump_setup(self) -> list[str]:
-        """Capture one MCu dump under the long-op lock; re-arm rich stream."""
+        """Capture one MCu dump under the long-op lock; re-arm rich stream.
+
+        Ends after MCU_QUIET_TIMEOUT without new lines (the dump is a finite
+        listing), with MCU_CAPTURE_TIMEOUT as the hard cap.
+        """
         async with self.lock:
             captured: list[str] = []
             self._mcu_capture = captured
             try:
                 self._write_raw(CMD_DUMP_SETUP)
-                await asyncio.sleep(MCU_CAPTURE_TIMEOUT)
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + MCU_CAPTURE_TIMEOUT
+                last_count = -1
+                quiet_since = loop.time()
+                while loop.time() < deadline:
+                    await asyncio.sleep(0.1)
+                    if len(captured) != last_count:
+                        last_count = len(captured)
+                        quiet_since = loop.time()
+                    elif loop.time() - quiet_since >= MCU_QUIET_TIMEOUT:
+                        break
                 return list(captured)
             finally:
                 self._mcu_capture = None

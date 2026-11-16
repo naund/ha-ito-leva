@@ -10,15 +10,23 @@ Frame layout (verified live 2026-04, see proxy.js header comment):
   Pos  5-7      PID 1 control type ('PID' / 'OFF'), vendor field at=4
   Pos  8-13     PID 1 boiler temperature, vendor field at=7
   Pos 14-18     PID 1 setpoint, vendor field at=13
+  Pos 19-21     PID 1 heat output, %, vendor field at=18
   Pos 153-155  volume, ml (3 digits, flow meter)
   Pos 156-160  ticks, 5-digit 100 Hz shot counter (timer s = ticks // 100)
   Pos 175-180  boiler temp, C ("NNN.NN")
+  Pos 193-197  pressure setpoint, bar, vendor field at=192
   Pos 198-202  pressure, bar ("NN.NN")
   Pos 203-207  pressure band low, Pos 208-212 band high
+  Pos 213-215  pump phase angle, deg (0 = full power), vendor at=212
+  Pos 216-218  phase bias, Pos 219-222 phase P, Pos 223-226 phase I
   Pos 227-231  weight, g ("NNN.N", scale/Waage)
   Pos 232-236  flow, ml/s ("NN.NN", flow meter, = LCD `R=` field)
   Pos 237-281  profile slot names 1-4 + active profile name
 Unavailable fields are '?' filled and parse as None.
+
+The phase fields are the internals of the pump pressure controller
+(manual p.109: output = bias + proportional + integral) and are only filled
+during pressure-profiled shots; they exist for tuning, see tools/record_shot.py.
 """
 
 from __future__ import annotations
@@ -26,7 +34,22 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from .const import CURSOR_GLYPH, FILL_GLYPH
+from .const import (
+    CURSOR_GLYPH,
+    ECO_TOLERANCE,
+    FILL_GLYPH,
+    HEATING_THRESHOLD,
+    STATUS_BREWING,
+    STATUS_COOLING,
+    STATUS_ECO,
+    STATUS_HEATING,
+    STATUS_OFFLINE,
+    STATUS_READY,
+    STATUS_STANDBY,
+    STATUS_STEAM,
+    STATUS_WAIT,
+    STEAM_MIN_OUTPUT,
+)
 
 # LCD glyph mapping for the text mirror (proxy.js cleanLine()).
 _LCD_GLYPH_MAP = {
@@ -68,6 +91,15 @@ def _parse_float(value: Optional[str]) -> Optional[float]:
     return number if number == number else None  # filter NaN
 
 
+def _parse_int(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value.strip())
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_rich_frame(line: str) -> Optional[dict]:
     """Parse a `{ ... }` rich telemetry frame. Returns None if unparseable."""
     line = line.strip()
@@ -92,9 +124,13 @@ def parse_rich_frame(line: str) -> Optional[dict]:
     if setpoint is not None and not 0 < setpoint < 200:
         setpoint = None
 
+    # Vendor field at=18 is the PID 1 output in % ("004", "100"). Needed to
+    # tell steam heating (PID bypassed, output high while temp > setpoint)
+    # from a boiler that is simply cooling down (output 0).
+    pid_output = _parse_int(_rich_field(body, 19, 3))
+
     volume_raw = _rich_field(body, 153, 3)
     volume = int(volume_raw) if volume_raw and volume_raw.strip().isdigit() else None
-
     ticks_raw = _rich_field(body, 156, 5)
     ticks = int(ticks_raw) if ticks_raw and ticks_raw.strip().isdigit() else None
     timer = ticks // 100 if ticks is not None else None
@@ -110,6 +146,15 @@ def parse_rich_frame(line: str) -> Optional[dict]:
     pressure_high = _parse_float(_rich_field(body, 208, 5))
     weight = _parse_float(_rich_field(body, 227, 5))
     flow_ml = _parse_float(_rich_field(body, 232, 5))
+
+    # Pump pressure controller internals (vendor at=192/212/215/218/222).
+    # Output = bias + proportional + integral (manual p.109), only available
+    # during pressure-profiled shots.
+    pressure_sp = _parse_float(_rich_field(body, 193, 5))
+    phase = _parse_float(_rich_field(body, 213, 3))
+    phase_bias = _parse_float(_rich_field(body, 216, 3))
+    phase_p = _parse_float(_rich_field(body, 219, 4))
+    phase_i = _parse_float(_rich_field(body, 223, 4))
 
     slot_names = [
         (_rich_field(body, 237, 9) or "").strip() or None,
@@ -137,10 +182,16 @@ def parse_rich_frame(line: str) -> Optional[dict]:
         "pressure": pressure,
         "pressure_low": pressure_low,
         "pressure_high": pressure_high,
+        "pressure_sp": pressure_sp,
+        "phase": phase,
+        "phase_bias": phase_bias,
+        "phase_p": phase_p,
+        "phase_i": phase_i,
         "temp": temp,
         "setpoint": setpoint,
         "pid_on": pid_on,
         "pid_control": pid_control,
+        "pid_output": pid_output,
         "volume": float(volume) if volume is not None else None,
         "timer": float(timer) if timer is not None else None,
         "timer_frac": timer_frac,
@@ -298,6 +349,73 @@ def parse_alarm_token(line: str) -> Optional[str]:
     if match and match.group(0) in ALARM_REASONS:
         return match.group(0)
     return None
+
+
+def derive_status(
+    *,
+    connected: bool,
+    state: str,
+    temp: Optional[float],
+    setpoint: Optional[float],
+    eco_setpoint: Optional[float] = None,
+    override: Optional[str] = None,
+    pid_output: Optional[float] = None,
+    heating_threshold: float = HEATING_THRESHOLD,
+    eco_tolerance: float = ECO_TOLERANCE,
+    steam_min_output: float = STEAM_MIN_OUTPUT,
+) -> str:
+    """Derive the user-facing machine status from rich telemetry.
+
+    Rich mode is the only stream the integration requests (`MCr`), and the
+    firmware does not report the display state there. What it *does* report is
+    enough for the statuses a user acts on: the PID setpoint (which in ECO mode
+    is the eco setpoint, and during the Ramp&Soak warm-up is the warm-up
+    target), the boiler temperature and the PID output.
+
+    `override` is the program currently overriding the brew setpoint (computed
+    by the coordinator from the setup tree); it is reported as its own phase,
+    not as an error. STEAM means the boiler is above the setpoint *while still
+    heating* (PID bypassed for steaming), as opposed to COOLING (output 0).
+
+    MENU/FLUSHING are deliberately absent: they exist only on the LCD stream
+    (`MC@`), and `MCr`/`MC@` are mutually exclusive (verified live).
+    """
+    if not connected or state in ("", "UNKNOWN"):
+        return STATUS_OFFLINE
+    if state == "STANDBY":
+        return STATUS_STANDBY
+    if state in ("PULLING", "BREWING", "FLUSHING", "STEAMING"):
+        return STATUS_BREWING
+    if state == "WAIT":
+        return STATUS_WAIT
+    if override:
+        return override
+    # Steaming heats past the brew setpoint with the PID bypassed (high output).
+    # Checked before ECO so an active steam heating is not hidden by eco mode.
+    if (
+        temp is not None
+        and setpoint is not None
+        and temp > setpoint + heating_threshold
+        and pid_output is not None
+        and pid_output >= steam_min_output
+    ):
+        return STATUS_STEAM
+    # ECO keeps the machine awake at its own setpoint (Setup > PID 1 > Eco),
+    # so an awake machine sitting on that setpoint is in energy-saver mode.
+    if (
+        eco_setpoint is not None
+        and setpoint is not None
+        and abs(setpoint - eco_setpoint) <= eco_tolerance
+    ):
+        return STATUS_ECO
+    if temp is not None and setpoint is not None:
+        if temp < setpoint - heating_threshold:
+            return STATUS_HEATING
+        if temp > setpoint + heating_threshold:
+            # Warmer than target without heat output: the boiler is easing
+            # down (warm-up ramp, descale, or a lowered setpoint).
+            return STATUS_COOLING
+    return STATUS_READY
 
 
 def parse_mcu_tree(lines: list[str]) -> dict:

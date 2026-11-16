@@ -90,6 +90,10 @@ class ItoLevaSimpleButton(ButtonEntity):
         self._attr_unique_id = f"{DOMAIN}_{key}"
         self.entity_id = ENTITY_IDS[key]
 
+    @property
+    def available(self) -> bool:
+        return self._coordinator.available
+
     async def async_press(self) -> None:
         self._coordinator.client.send_command(self._command)
 
@@ -107,6 +111,10 @@ class ItoLevaStartShot(ButtonEntity):
         self._coordinator = coordinator
         self._attr_device_info = device
         self._attr_unique_id = f"{DOMAIN}_start_shot"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.available
 
     async def async_press(self) -> None:
         client = self._coordinator.client
@@ -141,6 +149,10 @@ class ItoLevaStopShot(ButtonEntity):
         self._coordinator = coordinator
         self._attr_device_info = device
         self._attr_unique_id = f"{DOMAIN}_stop_shot"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.available
 
     async def async_press(self) -> None:
         await self._coordinator.client.stop_shot()

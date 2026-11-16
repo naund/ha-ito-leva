@@ -51,6 +51,7 @@ async def async_setup_entry(
             ItoLevaVolumeSensor(coordinator, device),
             ItoLevaTimerSensor(coordinator, device),
             ItoLevaAlarmSensor(coordinator, device),
+            ItoLevaStatusSensor(coordinator, device),
             ItoLevaConnectionSensor(coordinator, device),
             ItoLevaSetupControlSensor(coordinator, device),
             ItoLevaSetupSetpointSensor(coordinator, device),
@@ -87,6 +88,11 @@ class ItoLevaSensor(SensorEntity):
     @callback
     def _handle_update(self, *args) -> None:
         self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Unavailable only when the connection switch is off."""
+        return self._coordinator.available
 
 
 class ItoLevaStateSensor(ItoLevaSensor):
@@ -262,6 +268,43 @@ class ItoLevaAlarmSensor(ItoLevaSensor):
         return self._coordinator.data.alarm or "OK"
 
 
+class ItoLevaStatusSensor(ItoLevaSensor):
+    """User-facing machine status: READY / HEATING / ECO / STANDBY / …
+
+    Rich mode (the only stream the firmware provides while streaming) has no
+    display data, so the status is derived from setpoint and boiler
+    temperature - see parsers.derive_status().
+    """
+
+    entity_id = ENTITY_IDS["status"]
+    _attr_translation_key = "status"
+
+    _STATUS_ICONS = {
+        "READY": "mdi:check-circle-outline",
+        "HEATING": "mdi:fire",
+        "COOLING": "mdi:thermometer-chevron-down",
+        "WARM-UP": "mdi:radiator",
+        "STEAM": "mdi:pot-steam",
+        "ECO": "mdi:leaf",
+        "STANDBY": "mdi:power-sleep",
+        "BREWING": "mdi:coffee",
+        "WAIT": "mdi:timer-sand",
+        "OFFLINE": "mdi:lan-disconnect",
+    }
+
+    def __init__(self, coordinator, device) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{DOMAIN}_status"
+
+    @property
+    def native_value(self):
+        return self._coordinator.data.status
+
+    @property
+    def icon(self):
+        return self._STATUS_ICONS.get(self._coordinator.data.status, "mdi:coffee-maker")
+
+
 class ItoLevaConnectionSensor(ItoLevaSensor):
     entity_id = ENTITY_IDS["connection"]
     _attr_translation_key = "connection"
@@ -270,6 +313,11 @@ class ItoLevaConnectionSensor(ItoLevaSensor):
     def __init__(self, coordinator, device) -> None:
         super().__init__(coordinator, device)
         self._attr_unique_id = f"{DOMAIN}_connection"
+
+    @property
+    def available(self) -> bool:
+        """Always show whether the TCP link is up, even when detached."""
+        return True
 
     @property
     def native_value(self):

@@ -49,6 +49,10 @@ class _Base(TextEntity):
     def _handle_update(self, *args) -> None:
         self.async_write_ha_state()
 
+    @property
+    def available(self) -> bool:
+        return self._coordinator.available
+
     async def async_set_value(self, value: str) -> None:
         raise NotImplementedError("Read-only in Phase 1 (menu navigation is Phase 2)")
 

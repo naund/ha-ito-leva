@@ -66,6 +66,7 @@ class Telemetry:
     """One merged telemetry sample (rich frame preferred, LCD fallback)."""
 
     state: str = "UNKNOWN"
+    status: str = "OFFLINE"  # derived: READY/HEATING/ECO/STANDBY/BREWING/WAIT
     pressure: Optional[float] = None  # bar, group head
     flow: Optional[float] = None  # g/s, derived from scale weight deltas
     flow_ml: Optional[float] = None  # ml/s, from flow meter (R= field)
@@ -75,6 +76,7 @@ class Telemetry:
     setpoint: Optional[float] = None  # C target (vendor field at=13)
     pid_on: Optional[bool] = None  # PID control type != OFF
     pid_control: Optional[str] = None  # raw control type: PID | OFF
+    pid_output: Optional[int] = None  # % heat output (vendor field at=18)
     timer: Optional[float] = None  # s, shot elapsed
     shot_running: bool = False
     active_profile: Optional[str] = None

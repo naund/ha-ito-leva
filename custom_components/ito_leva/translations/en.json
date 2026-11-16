@@ -29,6 +29,7 @@
       "volume": { "name": "Volume" },
       "timer": { "name": "Shot timer" },
       "alarm": { "name": "Alarm" },
+      "status": { "name": "Operating status" },
       "connection": { "name": "Connection" },
       "setup_pid_control": { "name": "PID control (setup)" },
       "setup_pid_setpoint": { "name": "PID setpoint (setup)" },
@@ -53,6 +54,9 @@
     "text": {
       "lcd_mirror": { "name": "LCD mirror" },
       "active_profile": { "name": "Active profile" }
+    },
+    "switch": {
+      "connection": { "name": "Connection to machine" }
     }
   },
   "services": {

@@ -92,18 +92,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Open the TCP connection and forward platforms + services."""
     host: str = entry.data["host"]
     port: int = entry.data["port"]
-    coordinator = ItoLevaCoordinator(hass, host, port)
+    coordinator = ItoLevaCoordinator(hass, entry.entry_id, host, port)
 
-    await coordinator.async_start()
-    if not await coordinator.client.wait_ready(CONNECT_TIMEOUT):
-        await coordinator.async_stop()
-        raise ConfigEntryNotReady(
-            f"ITO at {host}:{port} did not reach the rich telemetry handshake"
-        )
+    # The connect/disconnect switch is persisted; a detached entry must load
+    # without a connection (and without failing with ConfigEntryNotReady).
+    await coordinator.async_load_connection_state()
+    if coordinator.connection_enabled:
+        await coordinator.async_start()
+        if not await coordinator.client.wait_ready(CONNECT_TIMEOUT):
+            await coordinator.async_stop()
+            raise ConfigEntryNotReady(
+                f"ITO at {host}:{port} did not reach the rich telemetry handshake"
+            )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     _register_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, list(PLATFORMS))
+
+    if coordinator.connection_enabled and coordinator.eco_setpoint is None:
+        # One read-only MCu dump gives the eco setpoint (status ECO) and
+        # populates the setup sensors; the result is cached in the store so
+        # this only runs on the first start.
+        entry.async_create_background_task(
+            hass,
+            coordinator.async_initial_setup_refresh(),
+            "ito_leva_initial_setup",
+        )
     return True
 
 

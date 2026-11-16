@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+# pressure-tuning recordings (tools/record_shot.py)
+tuning/

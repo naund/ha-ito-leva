@@ -12,6 +12,7 @@ import time
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -33,6 +34,7 @@ SENSOR_IDS = {
     "ito_leva_volume": "sensor.ito_leva_volume",
     "ito_leva_timer": "sensor.ito_leva_timer",
     "ito_leva_alarm": "sensor.ito_leva_alarm",
+    "ito_leva_status": "sensor.ito_leva_status",
     "ito_leva_connection": "sensor.ito_leva_connection",
     "ito_leva_setup_pid_control": "sensor.ito_leva_setup_pid_control",
     "ito_leva_setup_pid_setpoint": "sensor.ito_leva_setup_pid_setpoint",
@@ -112,7 +114,7 @@ async def test_config_flow_and_entity_inventory(hass, entry, fake):
     by_domain: dict[str, int] = {}
     for item in items:
         by_domain[item.domain] = by_domain.get(item.domain, 0) + 1
-    assert by_domain == {"sensor": 14, "button": 11, "number": 1, "text": 2}
+    assert by_domain == {"sensor": 15, "button": 11, "number": 1, "text": 2, "switch": 1}
 
     assert {item.unique_id for item in items} == {
         *SENSOR_IDS,
@@ -130,6 +132,7 @@ async def test_config_flow_and_entity_inventory(hass, entry, fake):
         "ito_leva_setpoint_number",
         "ito_leva_lcd",
         "ito_leva_active_profile",
+        "ito_leva_connection_switch",
     }
 
 
@@ -149,6 +152,9 @@ async def test_dashboard_entity_ids_and_friendly_names(hass, entry):
     )
     assert entity_id_for(hass, entry, "ito_leva_start_shot") == (
         "button.ito_leva_start_shot"
+    )
+    assert entity_id_for(hass, entry, "ito_leva_connection_switch") == (
+        "switch.ito_leva_connection"
     )
 
     device_name = "ITO Leva! (127.0.0.1)"
@@ -184,6 +190,8 @@ async def test_rich_telemetry_populates_entities(hass, entry, fake):
         state_of(hass, entry, "ito_leva_setpoint_number").state
     ) == pytest.approx(94.0)
     assert state_of(hass, entry, "ito_leva_active_profile").state == "TestProf"
+    # 93.5 C vs setpoint 94.0 C = inside the firmware's ready window.
+    assert state_of(hass, entry, "ito_leva_status").state == "READY"
 
 
 async def test_setpoint_number_uses_parsed_base(hass, entry, fake):
@@ -200,6 +208,208 @@ async def test_setpoint_number_uses_parsed_base(hass, entry, fake):
     assert fake.commands.count(b"MC+") - before == 10
     await wait_for_frames(hass, fake, fake.frames_sent + 5)
     assert float(hass.states.get(eid).state) == pytest.approx(95.0)
+
+
+async def test_setpoint_uses_measured_increment(hass, entry, fake):
+    """MC# can be 1.0 K per press: one press per kelvin, not ten.
+
+    Field-test regression: the old code assumed 0.1 K and sent a counted
+    burst, so asking for +1 K moved the target by +10 K.
+    """
+    await wait_for_frames(hass, fake)
+    fake.increment = 1.0
+    eid = entity_id_for(hass, entry, "ito_leva_setpoint_number")
+    before = fake.commands.count(b"MC+")
+
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": eid, "value": 96.0}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert fake.commands.count(b"MC+") - before == 2
+    assert fake.setpoint == pytest.approx(96.0)
+    await wait_for_frames(hass, fake, fake.frames_sent + 3)
+    assert float(hass.states.get(eid).state) == pytest.approx(96.0)
+
+
+async def test_setpoint_refused_by_program_override(hass, entry, fake):
+    """Warm-up / Ramp&Soak overrides the setpoint; the keys are ignored.
+
+    The write must stop after a bounded number of presses and surface an
+    error instead of silently diverging (manual p.7: the setpoint cannot be
+    adjusted while a program overrides it).
+    """
+    await wait_for_frames(hass, fake)
+    fake.refuse_setpoint = True
+    eid = entity_id_for(hass, entry, "ito_leva_setpoint_number")
+    before = fake.commands.count(b"MC+")
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": eid, "value": 95.0}, blocking=True
+        )
+
+    assert fake.commands.count(b"MC+") - before == 3  # bounded, not ten
+    assert fake.setpoint == pytest.approx(94.0)
+
+
+async def test_setpoint_refused_while_brewing(hass, entry, fake):
+    """MC+/MC- act on pump power while the pump runs (manual p.7)."""
+    await wait_for_frames(hass, fake)
+    fake.shot = True
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+    assert state_of(hass, entry, "ito_leva_state").state == "PULLING"
+
+    eid = entity_id_for(hass, entry, "ito_leva_setpoint_number")
+    before = fake.commands.count(b"MC+")
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": eid, "value": 95.0}, blocking=True
+        )
+    assert fake.commands.count(b"MC+") == before
+
+
+async def test_frozen_ticks_do_not_mean_wait(hass, entry, fake):
+    """The rich frame keeps the last shot's ticks; that is not "WAIT".
+
+    Pressing OK in that state opens the device MENU, after which MC+/MC-
+    navigate the menu instead of changing the temperature.
+    """
+    await wait_for_frames(hass, fake)
+    fake._ticks = 758  # last shot 7.58 s ago; machine idle at the home screen
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+
+    assert state_of(hass, entry, "ito_leva_state").state == "IDLE"
+    assert float(state_of(hass, entry, "ito_leva_timer").state) == pytest.approx(0.0)
+
+    before_ok = fake.commands.count(b"MC\x03")
+    await press(hass, entry, "ito_leva_stop_shot")
+    assert fake.commands.count(b"MC\x03") == before_ok
+
+
+async def test_status_ready_heating_and_standby(hass, entry, fake):
+    await wait_for_frames(hass, fake)
+    # 93.5 C vs setpoint 94.0 C: inside the firmware's +/-1.0 K ready window.
+    assert state_of(hass, entry, "ito_leva_status").state == "READY"
+
+    fake.temp = 80.0
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+    assert state_of(hass, entry, "ito_leva_status").state == "HEATING"
+
+    await press(hass, entry, "ito_leva_standby")
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+    assert state_of(hass, entry, "ito_leva_status").state == "STANDBY"
+
+
+async def test_status_eco(hass, entry, fake):
+    """ECO = awake and sitting on Setup > PID 1 > Eco (82.3 C, live 81.3 C)."""
+    await wait_for_frames(hass, fake)
+    await hass.services.async_call(DOMAIN, "refresh_setup", blocking=True)
+    await hass.async_block_till_done()
+
+    await press(hass, entry, "ito_leva_eco")
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+    assert float(state_of(hass, entry, "ito_leva_setpoint").state) == pytest.approx(81.3)
+    assert state_of(hass, entry, "ito_leva_status").state == "ECO"
+
+
+async def test_connection_switch_detaches_and_reattaches(hass, entry, fake):
+    """switch.ito_leva_connection pauses the TCP link without unloading."""
+    await wait_for_frames(hass, fake)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    switch_id = entity_id_for(hass, entry, "ito_leva_connection_switch")
+    assert hass.states.get(switch_id).state == "on"
+    assert coordinator.connected is True
+
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": switch_id}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(switch_id).state == "off"
+    assert coordinator.client._running is False
+    assert coordinator.client._writer is None
+    assert state_of(hass, entry, "ito_leva_connection").state == "disconnected"
+    # Everything except the switch and the connection sensor is unavailable.
+    assert state_of(hass, entry, "ito_leva_status").state == "unavailable"
+    assert state_of(hass, entry, "ito_leva_temp").state == "unavailable"
+
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": switch_id}, blocking=True
+    )
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+    assert hass.states.get(switch_id).state == "on"
+    assert coordinator.connected is True
+    assert state_of(hass, entry, "ito_leva_connection").state == "connected"
+    assert state_of(hass, entry, "ito_leva_status").state == "READY"
+
+
+async def test_connection_switch_state_survives_reload(hass, entry, fake):
+    """A detached entry must load again without a connection."""
+    await wait_for_frames(hass, fake)
+    switch_id = entity_id_for(hass, entry, "ito_leva_connection_switch")
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": switch_id}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    assert coordinator.connection_enabled is False
+    assert coordinator.connected is False
+    assert hass.states.get(switch_id).state == "off"
+
+
+async def test_warmup_is_a_normal_phase_and_locks_setpoint(hass, entry, fake):
+    """Warm-up (Ramp&Soak) overrides the setpoint: refuse, do not fight it.
+
+    Setup > PID 1 > Ramp&Soak > Warm-Up > 1 > Target = 110.0 C; while it runs
+    the rich frame reports 110.0 C instead of the stored 94.2 C. The firmware
+    ignores setpoint keys in that phase (manual p.7), so no presses may be sent.
+    """
+    await wait_for_frames(hass, fake)
+    await hass.services.async_call(DOMAIN, "refresh_setup", blocking=True)
+    await hass.async_block_till_done()
+
+    fake.setpoint = 110.0  # warm-up override active
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+
+    assert state_of(hass, entry, "ito_leva_status").state == "WARM-UP"
+    eid = entity_id_for(hass, entry, "ito_leva_setpoint_number")
+    assert hass.states.get(eid).attributes["locked"] is True
+    assert hass.states.get(eid).attributes["lock_reason"] == "WARM-UP"
+
+    before = fake.commands.count(b"MC+") + fake.commands.count(b"MC-")
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": eid, "value": 94.0}, blocking=True
+        )
+    assert fake.commands.count(b"MC+") + fake.commands.count(b"MC-") == before
+    assert fake.setpoint == pytest.approx(110.0)
+
+
+async def test_steam_heating_is_a_normal_phase_and_locks_setpoint(hass, entry, fake):
+    """Steaming bypasses the PID: boiler above target at high output."""
+    await wait_for_frames(hass, fake)
+    fake.temp = 128.0
+    fake.setpoint = 94.0
+    fake.pid_output = 100
+    await wait_for_frames(hass, fake, fake.frames_sent + 5)
+
+    assert state_of(hass, entry, "ito_leva_status").state == "STEAM"
+    eid = entity_id_for(hass, entry, "ito_leva_setpoint_number")
+    assert hass.states.get(eid).attributes["lock_reason"] == "STEAM"
+
+    before = fake.commands.count(b"MC+") + fake.commands.count(b"MC-")
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": eid, "value": 95.0}, blocking=True
+        )
+    assert fake.commands.count(b"MC+") + fake.commands.count(b"MC-") == before
 
 
 async def test_start_and_stop_shot(hass, entry, fake):
@@ -291,6 +501,11 @@ async def test_mcu_refresh_setup_service(hass, entry, fake):
     tree = coordinator.setup_tree
     assert tree["PID 1"]["Control"] == "PID"
     assert tree["PID 1"]["Setpoint"] == "94.2"
+    # Eco setpoint: used for status ECO and cached for the next restart.
+    # (The client strips non-ASCII bytes, so the degree sign is not in the tree.)
+    assert tree["PID 1"]["Eco"] == "82.3"
+    assert coordinator.eco_setpoint == pytest.approx(82.3)
+    assert coordinator.heating_threshold == pytest.approx(1.0)
     assert tree["Sensors"]["Temperature"]["Type"] == "NTC"
     # Telemetry frames captured during the MCu window are not tree keys.
     assert "{" not in tree

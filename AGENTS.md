@@ -75,26 +75,71 @@ services and inspect entity registry/state, as a user would.
     `237–281` profile names.
 - A fully `?`-filled rich frame means **STANDBY**; the machine keeps streaming
   unusable frames instead of going silent.
+- **`MCr` and `MC@` are mutually exclusive** (measured live 2026-11): `MCr`
+  streams only `{…}` rich frames (≈4 Hz), `MC@` only `<…>` LCD frames (≈10 Hz).
+  Rich mode therefore has **no display state**: `MENU`, `FLUSHING`, `HEATING`
+  and the LCD mirror only exist in `MC@` mode. Do not build status on the LCD
+  stream unless you switch modes deliberately.
+- **The tick counter stays frozen at the last shot** (live: `00758` in every
+  frame while the LCD home screen showed `0s`). `timer > 0` alone is **not**
+  WAIT; the coordinator only reports WAIT for `WAIT_GRACE` seconds after a
+  frame with the `*` marker.
 - LCD frames are `<BKL + 4×16>`; `\x04`→`▶`, `\x05`→`✓`, `\xDF`→`°`.
   LCD rows/temperature/pressure are a fallback and must survive rich frames.
 - Start: wake from STANDBY (`MCa`, re-arm with `MCr`), leave MENU with CANCEL,
   then fire the active dose with **`MCcDOSE`**. Never use Shortcut 1 (`\x05`):
   it starts FLUSH on this machine.
-- Stop: `OK` (`\x03`) **only** in `PULLING`/`BREWING`/`FLUSHING`/`WAIT`.
-  Pressing OK while idle opens the device MENU.
+- Stop: `OK` (`\x03`) **only** in `PULLING`/`BREWING`/`FLUSHING`
+  (`const.STOP_STATES`). Pressing OK while idle opens the device MENU, and
+  `MC+`/`MC-` inside the MENU navigate/edit instead of changing temperature.
+  Never add `WAIT` back to that tuple.
 - Standby: `MCE` (short form). Eco: `MCe` (short form, lowers setpoint to
-  ~81.3 °C while staying awake). The long `MCcSTANDBY` / `MCcECO` forms are
-  ignored by the firmware.
-- Setpoint is relative only (`MC+` / `MC-` = 0.1 °C per step). Parse the
-  absolute value first; never send a blind single nudge.
+  ~81.3 °C while staying awake; stored eco setpoint is `Setup > PID 1 > Eco`,
+  live 82.3 °C). The long `MCcSTANDBY` / `MCcECO` forms are ignored.
+- Setpoint keys: `MC+`/`MC-` = "Change setpoint" (manual p.227), but the step
+  size comes from `MC#` and is **0.1, 1.0 or 10 K** — the vendor frame exposes
+  it as the `increment` field (`at=163`, live `001.0`). Never convert an
+  absolute target into a counted burst assuming 0.1 K; the coordinator
+  measures the increment from the first read-back and verifies every round.
+- Setpoint writes are **refused while a program overrides the setpoint**
+  (warm-up, Ramp & Soak; manual p.7, footnote 2). This is a **normal phase, not
+  an error**: do not send presses, do not raise a notification, log at INFO.
+  The rich frame then shows the program's value (live: `110.0` during warm-up),
+  not `Setup > PID 1 > Setpoint`.
+  - Warm-up signature: `PID 1 > Ramp&Soak > Warm-Up > 1 > Target` (live
+    `110.0`, step 2 hands back to `PID` after 6m30s) == live setpoint and
+    != stored brew setpoint. The top-level `Warm-Up` program
+    (`Autostart 40.0°`, vent + flush steps) purges the group afterwards.
+  - Steam signature: boiler above setpoint + tolerance **and** `at=18`
+    (Heat PID) >= 50 % — the PID is bypassed for steaming. Output 0 means the
+    boiler is only cooling down (COOLING, not STEAM).
+  - `number.ito_leva_setpoint` exposes `locked` / `lock_reason` for the UI.
+  With the pump running, `MC+`/`MC-` change pump power, not temperature.
 - `MCc…` commands are sent as one line (`MCc<name>\r`). Virtual buttons are
   `MC<byte>\r` + `MC\x00\r` after 30 ms.
+- Pump pressure controller internals live in the rich frame (vendor XML, frame
+  pos = `at` + 1): `Pressure SP` `at=192`, `Phase` `at=212`, `Phase (Bias)`
+  `at=215`, `Phase (P)` `at=218`, `Phase (I)` `at=222`, `Heat PID` `at=18`.
+  They are `?` unless a pressure-profiled shot runs, and must satisfy
+  `phase = bias + P + I` (manual p.109). Log them with
+  `tools/record_shot.py` (read-only; `--pressure-test` only uses `MCb`).
+  A full PI tuning needs both ranges (< 2.5 bar and > 2.5 bar), a static
+  pressure test and repeated shots - see README.
 
 ## Entities, IDs and migration
 
 - Dashboard/automation IDs are fixed in `const.ENTITY_IDS`
-  (`sensor.ito_leva_temp`, `number.ito_leva_setpoint`,
+  (`sensor.ito_leva_temp`, `sensor.ito_leva_status`,
+  `number.ito_leva_setpoint`, `switch.ito_leva_connection`,
   `text.ito_leva_lcd_mirror`, `button.ito_leva_start_shot`, …).
+- `switch.ito_leva_connection` pauses the TCP client without unloading the
+  entry; the desired state is persisted in `Store` (`<domain>.<entry>_connection`).
+  Entities are `unavailable` while detached, except the switch and the
+  connection sensor.
+- `sensor.ito_leva_status` is derived (`parsers.derive_status()`), not read
+  from the machine: READY/HEATING/COOLING use the firmware's own ±1.0 K
+  tolerance (`Setup > PID 1 > Signal`), ECO compares the live setpoint to
+  `Setup > PID 1 > Eco` (cached in the store after the first MCu dump).
 - Platforms set `entity_id` from that map and `has_entity_name = True` so
   Friendly Names come from `translations/*.json` while IDs stay stable.
 - `ConfigFlow.VERSION = 2`; `async_migrate_entry()` rewrites v1 host-based IDs

@@ -17,6 +17,7 @@ def build_rich(
     pid_type: str = "PID",
     temp: float = 93.5,
     setpoint: float = 94.0,
+    pid_output: int = 4,
     pressure: float = 0.2,
     volume: int = 0,
     ticks: int = 0,
@@ -30,6 +31,7 @@ def build_rich(
     body[3:6] = list(pid_type)
     body[6:12] = list(f"{temp:06.2f}")
     body[12:17] = list(f"{setpoint:05.1f}")
+    body[17:20] = list(f"{pid_output:03d}")      # Pos 19-21 (vendor at=18)
     body[151:154] = list(f"{volume:03d}")
     body[154:159] = list(f"{ticks:05d}")
     body[173:179] = list(f"{temp:06.2f}")       # Pos 175-180
@@ -68,6 +70,14 @@ class FakeIto:
         self.flush = False
         self.block_shot = False
         self.setpoint = 94.0
+        self.temp = 93.5
+        self.pid_output = 4
+        # Size of one MC+/MC- press. Real firmware exposes this via MC# and the
+        # vendor "increment" field (0.1, 1.0 or 10); tests cover all of them.
+        self.increment = 0.1
+        # Simulates a program override (e.g. Ramp&Soak warm-up): the firmware
+        # refuses setpoint keys while the override is active.
+        self.refuse_setpoint = False
         self._ticks = 0
         self._volume = 0
         self._weight = 0.0
@@ -160,9 +170,15 @@ class FakeIto:
             self.setpoint = 94.0
             self._ensure_stream()
         elif line == "MC+":
-            self.setpoint = round(min(100.0, self.setpoint + 0.1), 1)
+            if not self.refuse_setpoint:
+                self.setpoint = round(
+                    min(100.0, self.setpoint + self.increment), 3
+                )
         elif line == "MC-":
-            self.setpoint = round(max(80.0, self.setpoint - 0.1), 1)
+            if not self.refuse_setpoint:
+                self.setpoint = round(
+                    max(80.0, self.setpoint - self.increment), 3
+                )
         elif line == "MC@":
             self.lcd_mode = True
             self._ensure_stream()
@@ -197,8 +213,9 @@ class FakeIto:
                     weight=self._weight if self._weight else None,
                     flow=2.4 if self.shot else None,
                     pressure=9.0 if self.shot else 0.2,
-                    temp=93.5,
+                    temp=self.temp,
                     setpoint=self.setpoint,
+                    pid_output=self.pid_output,
                 )
             for writer in list(self._writers):
                 with contextlib.suppress(Exception):
@@ -206,14 +223,14 @@ class FakeIto:
                         if self.shot:
                             lcd = build_lcd(
                                 "WARM-UP         ",
-                                "1: 93.5\xdf       ",
+                                f"1: {self.temp:.1f}\xdf       ",
                                 "      100% 93.6\xdf",
                                 " 9.0bR=2.4 25s   ",
                             )
                         else:
                             lcd = build_lcd(
                                 "WARM-UP         ",
-                                "1: 93.5\xdf       ",
+                                f"1: {self.temp:.1f}\xdf       ",
                                 "      000% 93.6\xdf",
                                 " 0.2b-  0s   0ml",
                             )
@@ -229,6 +246,14 @@ class FakeIto:
             "PID 1...",
             "| Control     PID",
             "| Setpoint    94.2",
+            "| Signal ERR>1.0°",
+            "| Eco       82.3°",
+            "| Ramp&Soak...",
+            "| | Warm-Up...",
+            "| | | 1...",
+            "| | | | Target   110.0°",
+            "| | | 2...",
+            "| | | | Target      PID",
             "Sensors...",
             "| Temperature...",
             "| | Type   NTC",

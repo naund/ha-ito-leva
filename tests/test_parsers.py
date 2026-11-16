@@ -18,6 +18,7 @@ sys.modules["ito_leva"] = _pkg
 from ito_leva.parsers import (
     ALARM_REASONS,
     classify_lcd_state,
+    derive_status,
     parse_alarm_token,
     parse_lcd_frame,
     parse_mcu_tree,
@@ -68,6 +69,39 @@ def test_rich_pulling_frame():
     assert sample["setpoint"] == 94.2
     assert sample["pid_on"] is True
     assert sample["pid_control"] == "PID"
+
+
+def test_rich_pressure_controller_fields():
+    """Pump PI internals: output = bias + P + I (manual p.109)."""
+    sample = parse_rich_frame(
+        "{"
+        + _rich_body(
+            {
+                19: "085",  # Heat PID %
+                193: "09.00",  # Pressure SP
+                213: "070",  # Phase
+                216: "052",  # Phase (bias)
+                219: "0012",  # Phase (P), 4 chars
+                223: "0006",  # Phase (I), 4 chars
+            }
+        )
+        + "}"
+    )
+    assert sample is not None
+    assert sample["pid_output"] == 85
+    assert sample["pressure_sp"] == 9.0
+    assert sample["phase"] == 70.0
+    assert sample["phase_bias"] == 52.0
+    assert sample["phase_p"] == 12.0
+    assert sample["phase_i"] == 6.0
+    assert sample["phase"] == sample["phase_bias"] + sample["phase_p"] + sample["phase_i"]
+
+
+def test_rich_pressure_fields_absent_when_question_filled():
+    sample = parse_rich_frame("{" + _rich_body() + "}")
+    assert sample is not None
+    assert sample["phase"] is None
+    assert sample["pressure_sp"] is None
 
 
 def test_rich_idle_frame():
@@ -166,6 +200,53 @@ def test_mcu_tree_depth_parsing():
     assert tree["PID 1"]["Control"] == "PID"
     assert tree["PID 1"]["Setpoint"] == "93.0"
     assert tree["Sensors"]["Temperature"]["Type"] == "NTC"
+
+
+def test_derive_status():
+    """Status is derived from setpoint/temperature in rich mode."""
+    base = {"temp": 93.5, "setpoint": 94.0, "eco_setpoint": 82.3}
+    assert derive_status(connected=True, state="IDLE", **base) == "READY"
+    # Within the firmware's +/-1.0 K ready window (manual p.196).
+    assert derive_status(connected=True, state="IDLE", temp=93.1, setpoint=94.0) == (
+        "READY"
+    )
+    assert derive_status(connected=True, state="IDLE", temp=92.5, setpoint=94.0) == (
+        "HEATING"
+    )
+    # Above target by more than the tolerance = easing down, not ready.
+    assert derive_status(connected=True, state="IDLE", temp=98.0, setpoint=94.0) == (
+        "COOLING"
+    )
+    # The warm-up program overrides the setpoint: a normal phase, not an error.
+    assert derive_status(
+        connected=True, state="IDLE", temp=47.4, setpoint=110.0, override="WARM-UP"
+    ) == "WARM-UP"
+    # Steam: PID bypassed, boiler past the brew setpoint at high output.
+    assert derive_status(
+        connected=True, state="IDLE", temp=120.0, setpoint=94.0, pid_output=100
+    ) == "STEAM"
+    # Steam wins over eco (steaming from eco), cooling does not.
+    assert derive_status(
+        connected=True, state="IDLE", temp=120.0, setpoint=81.3,
+        eco_setpoint=82.3, pid_output=100,
+    ) == "STEAM"
+    assert derive_status(
+        connected=True, state="IDLE", temp=98.0, setpoint=94.0, pid_output=0
+    ) == "COOLING"
+    # Warm-up override: heating towards the program's own setpoint.
+    assert derive_status(connected=True, state="IDLE", temp=47.4, setpoint=110.0) == (
+        "HEATING"
+    )
+    # Eco sits on its own setpoint (live 81.3 vs stored 82.3 on the reference).
+    assert derive_status(connected=True, state="IDLE", temp=81.0, setpoint=81.3,
+                         eco_setpoint=82.3) == "ECO"
+    assert derive_status(connected=True, state="STANDBY", temp=None,
+                         setpoint=None) == "STANDBY"
+    assert derive_status(connected=True, state="PULLING", **base) == "BREWING"
+    assert derive_status(connected=True, state="WAIT", **base) == "WAIT"
+    # No connection / no frames yet must never look like READY.
+    assert derive_status(connected=False, state="IDLE", **base) == "OFFLINE"
+    assert derive_status(connected=True, state="UNKNOWN", **base) == "OFFLINE"
 
 
 def test_mcu_tree_skips_telemetry_frames():

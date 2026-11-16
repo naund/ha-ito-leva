@@ -13,6 +13,7 @@ Frame layout (verified live 2026-04, see proxy.js header comment):
   Pos 19-21     PID 1 heat output, %, vendor field at=18
   Pos 153-155  volume, ml (3 digits, flow meter)
   Pos 156-160  ticks, 5-digit 100 Hz shot counter (timer s = ticks // 100)
+  Pos 161-163  flow meter, ml/s (raw per minute x 0.0166; LCD `R=` field)
   Pos 175-180  boiler temp, C ("NNN.NN")
   Pos 193-197  pressure setpoint, bar, vendor field at=192
   Pos 198-202  pressure, bar ("NN.NN")
@@ -20,7 +21,8 @@ Frame layout (verified live 2026-04, see proxy.js header comment):
   Pos 213-215  pump phase angle, deg (0 = full power), vendor at=212
   Pos 216-218  phase bias, Pos 219-222 phase P, Pos 223-226 phase I
   Pos 227-231  weight, g ("NNN.N", scale/Waage)
-  Pos 232-236  flow, ml/s ("NN.NN", flow meter, = LCD `R=` field)
+  Pos 232-236  flow from the scale, g/s (empty without a paired scale)
+  Pos 282-284  flow tracking, ml/s (vendor at=281, x 0.01666)
   Pos 237-281  profile slot names 1-4 + active profile name
 Unavailable fields are '?' filled and parse as None.
 
@@ -38,6 +40,7 @@ from .const import (
     CURSOR_GLYPH,
     ECO_TOLERANCE,
     FILL_GLYPH,
+    FLOW_METER_FACTOR,
     HEATING_THRESHOLD,
     STATUS_BREWING,
     STATUS_COOLING,
@@ -131,6 +134,17 @@ def parse_rich_frame(line: str) -> Optional[dict]:
 
     volume_raw = _rich_field(body, 153, 3)
     volume = int(volume_raw) if volume_raw and volume_raw.strip().isdigit() else None
+
+    # Vendor at=160 "Flow rate" (ml/s, factor 0.0166): the machine's flow meter.
+    # The raw value is per minute, hence the 1/60 factor. This is the sensor
+    # that works without a Bluetooth scale (the LCD shows it as "R=X.XX").
+    flow_meter_raw = _parse_float(_rich_field(body, 161, 3))
+    flow_meter = (
+        round(flow_meter_raw * FLOW_METER_FACTOR, 2)
+        if flow_meter_raw is not None
+        else None
+    )
+
     ticks_raw = _rich_field(body, 156, 5)
     ticks = int(ticks_raw) if ticks_raw and ticks_raw.strip().isdigit() else None
     timer = ticks // 100 if ticks is not None else None
@@ -145,7 +159,16 @@ def parse_rich_frame(line: str) -> Optional[dict]:
     pressure_low = _parse_float(_rich_field(body, 203, 5))
     pressure_high = _parse_float(_rich_field(body, 208, 5))
     weight = _parse_float(_rich_field(body, 227, 5))
-    flow_ml = _parse_float(_rich_field(body, 232, 5))
+    # Vendor at=231 "Flow rate" (g/s): derived from the Bluetooth scale, so it
+    # is empty without a paired scale. Do not present this as the flow meter.
+    flow_scale = _parse_float(_rich_field(body, 232, 5))
+    # Vendor at=281 "Flow tracking" (ml/s, factor 0.01666).
+    flow_tracking_raw = _parse_float(_rich_field(body, 282, 3))
+    flow_tracking = (
+        round(flow_tracking_raw * FLOW_METER_FACTOR, 2)
+        if flow_tracking_raw is not None
+        else None
+    )
 
     # Pump pressure controller internals (vendor at=192/212/215/218/222).
     # Output = bias + proportional + integral (manual p.109), only available
@@ -197,7 +220,9 @@ def parse_rich_frame(line: str) -> Optional[dict]:
         "timer_frac": timer_frac,
         "ticks": ticks,
         "weight": weight,
-        "flow_ml": flow_ml if flow_ml is not None else 0.0,
+        "flow_ml": flow_meter,
+        "flow_scale": flow_scale,
+        "flow_tracking": flow_tracking,
         "shot_running": shot_running,
         "active_profile": active_profile,
         "active_profile_name": active_profile_name,
@@ -298,7 +323,7 @@ def parse_lcd_frame(raw: str) -> Optional[dict]:
     weight = float(weight_m.group(1)) if weight_m else None
 
     flow_m = _LCD_FLOW_RE.search(inner.upper())
-    flow_ml = float(flow_m.group(1)) if flow_m else 0.0
+    flow_ml = float(flow_m.group(1)) if flow_m else None
 
     return {
         "prefix": prefix,

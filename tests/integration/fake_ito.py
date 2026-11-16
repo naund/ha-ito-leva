@@ -23,6 +23,7 @@ def build_rich(
     ticks: int = 0,
     weight: float | None = None,
     flow: float | None = None,
+    flow_meter: float = 0.0,
     profile: str = "TestProf",
 ) -> str:
     body = ["?"] * 287
@@ -33,6 +34,8 @@ def build_rich(
     body[12:17] = list(f"{setpoint:05.1f}")
     body[17:20] = list(f"{pid_output:03d}")      # Pos 19-21 (vendor at=18)
     body[151:154] = list(f"{volume:03d}")
+    # Vendor at=160: flow meter, raw value per minute (ml/s = raw * 0.0166).
+    body[159:162] = list(f"{int(round(flow_meter / 0.0166)):03d}")
     body[154:159] = list(f"{ticks:05d}")
     body[173:179] = list(f"{temp:06.2f}")       # Pos 175-180
     body[196:201] = list(f"{pressure:05.2f}")   # Pos 198-202
@@ -212,6 +215,7 @@ class FakeIto:
                     volume=self._volume,
                     weight=self._weight if self._weight else None,
                     flow=2.4 if self.shot else None,
+                    flow_meter=2.4 if self.shot else 0.0,
                     pressure=9.0 if self.shot else 0.2,
                     temp=self.temp,
                     setpoint=self.setpoint,

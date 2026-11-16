@@ -458,14 +458,15 @@ class ItoLevaCoordinator:
 
     def _derive_flow(
         self, state: str, weight: float | None, now: float
-    ) -> float:
+    ) -> float | None:
         if state == "STANDBY" or weight is None:
             self._flow_base = (weight or 0.0, now)
             self._flow_value = 0.0
-            return 0.0
+            # No scale (Waage) paired: report unknown, not "0.0 g/s".
+            return None
         if self._flow_base is None:
             self._flow_base = (weight, now)
-            return 0.0
+            return None
         base_weight, base_ts = self._flow_base
         delta_w, delta_t = weight - base_weight, now - base_ts
         if delta_w < -0.5:  # cup removed / tared -> re-baseline

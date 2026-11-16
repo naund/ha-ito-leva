@@ -69,6 +69,8 @@ COLUMNS = [
     "phase_p",
     "phase_i",
     "flow_ml",
+    "flow_scale",
+    "flow_tracking",
     "volume",
     "weight",
     "ticks",
@@ -147,6 +149,8 @@ def _row(ts: float, t0: float, sample: dict) -> dict:
         "phase_p": sample.get("phase_p"),
         "phase_i": sample.get("phase_i"),
         "flow_ml": sample.get("flow_ml"),
+        "flow_scale": sample.get("flow_scale"),
+        "flow_tracking": sample.get("flow_tracking"),
         "volume": sample.get("volume"),
         "weight": sample.get("weight"),
         "ticks": sample.get("ticks"),
@@ -218,8 +222,18 @@ def summarize(rows: list[dict], name: str) -> None:
         print(f"  phase            : {mean_ph:.0f} deg  (sd {sd_ph:.1f})")
         print("                     high sd = K too strong (phase hunting)")
     if flow:
-        print(f"  flow             : {min(flow):.1f}-{max(flow):.1f} ml/s"
+        print(f"  flow (meter)     : {min(flow):.1f}-{max(flow):.1f} ml/s"
               + ("  CHOKED" if min(flow) <= 0.0 else ""))
+    # Cross-check the flow-meter field against the volume counter: the slope of
+    # the ml counter must match the reported ml/s (validates field + factor).
+    volume = [
+        (float(r["t_rel"]), r["volume"])
+        for r in rows
+        if isinstance(r["volume"], float)
+    ]
+    if len(volume) >= 3 and volume[-1][0] > volume[0][0]:
+        slope = (volume[-1][1] - volume[0][1]) / (volume[-1][0] - volume[0][0])
+        print(f"  volume slope     : {slope:.2f} ml/s (cross-check for flow)")
     if identity:
         print(f"  identity |phase-(bias+P+I)|: max {max(identity):.1f} deg"
               "  (should be ~0; large = mapping/rounding off)")

@@ -122,6 +122,11 @@ CURSOR_GLYPH = "\u25ba"  # \x04 cursor -> BLACK RIGHT-POINTING POINTER
 FILL_GLYPH = "\u2713"  # \x05 progress fill -> CHECK MARK
 DEGREE_BYTE = "\xdf"  # latin-1 degree sign byte used by the firmware
 
+# Vendor Status-Monitor XML: the flow-meter fields carry a per-minute raw value
+# with factor 0.0166 (= 1/60), so raw * 0.0166 is ml/s. The scale's own flow
+# (g/s) is a different field and only exists with a paired Bluetooth scale.
+FLOW_METER_FACTOR = 0.0166
+
 # Platforms exposed in Phase 1.
 PLATFORMS = ("sensor", "button", "number", "text", "switch")
 

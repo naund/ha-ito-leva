@@ -35,6 +35,7 @@ def _rich_body(overrides: dict[int, str] | None = None) -> str:
         14: "094.2",
         153: "042",
         156: "02622",
+        161: "145",  # flow meter: raw per minute -> 2.41 ml/s
         175: "093.50",
         198: "09.00",
         203: "08.80",
@@ -64,7 +65,9 @@ def test_rich_pulling_frame():
     assert sample["timer_frac"] == 26.22
     assert sample["ticks"] == 2622
     assert sample["weight"] == 107.5
-    assert sample["flow_ml"] == 2.46
+    assert sample["flow_ml"] == round(145 * 0.0166, 2)  # flow meter, ml/s
+    assert sample["flow_scale"] == 2.46  # scale, g/s (vendor at=231)
+    assert sample["flow_tracking"] is None
     assert sample["active_profile_name"] == "Declining"
     assert sample["setpoint"] == 94.2
     assert sample["pid_on"] is True
